@@ -1,0 +1,208 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: Unofficial-Seattle-Metro-Api
+
+Parameters:
+  BucketNameUnprocessed:
+    Description: S3 Bucket for unprocessed document model
+    Type: String
+    Default: unprocessed-metro-model
+  BucketNameProcessed:
+    Description: S3 Bucket for processed document model
+    Type: String
+    Default: processed-metro-model
+  RootRole:
+    Description: Role for Unofficial Seattle Metro Api
+    Type: String
+    Default: MetroRole
+  Region:
+    Description: us-west-2 Region used throughout application
+    Type: String
+    Default: us-west-2
+
+Globals:
+  Function:
+    Runtime: java8
+    MemorySize: 512
+    Timeout: 25
+    Environment:
+      Variables:
+        UNPROCESSED_BUCKET_NAME: !Ref BucketNameUnprocessed
+        PROCESSED_BUCKET_NAME: !Ref BucketNameProcessed
+        REGION: !Ref Region
+
+Resources:
+  MetroRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Description: Role to provide access to s3, dynamodb and basic lambda execution
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+      RoleName: !Ref RootRole
+
+  CrawlMetroEvent:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: target/lambda.zip
+      Role: !GetAtt MetroRole.Arn
+      Handler: org.morris.unofficial.events.CrawlMetroEvent::handleRequest
+
+  ProcessCrawledMetroDataEvent:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: target/lambda.zip
+      Role: !GetAtt MetroRole.Arn
+      Handler: org.morris.unofficial.events.ProcessCrawledMetroDataEvent::handleRequest
+
+  LoadTransformedMetroDataEvent:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: target/lambda.zip
+      Role: !GetAtt MetroRole.Arn
+      Handler: org.morris.unofficial.events.LoadTransformedMetroDataEvent::handleRequest
+
+  S3BucketUnProcessed:
+    Type: AWS::S3::Bucket
+    DependsOn: BucketPermission1
+    Description: Holds Crawled SEA Metro document data
+    Properties:
+      BucketName: !Ref BucketNameUnprocessed
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            Function: !GetAtt ProcessCrawledMetroDataEvent.Arn
+
+  S3BucketProcessed:
+    Type: AWS::S3::Bucket
+    DependsOn: BucketPermission2
+    Description: Holds Transformed Crawled SEA Metro document data
+    Properties:
+      BucketName: !Ref BucketNameProcessed
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            Function: !GetAtt LoadTransformedMetroDataEvent.Arn
+
+  BucketPermission1:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref ProcessCrawledMetroDataEvent
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref "AWS::AccountId"
+      SourceArn: !Sub "arn:aws:s3:::${BucketNameUnprocessed}"
+
+  BucketPermission2:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref LoadTransformedMetroDataEvent
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref "AWS::AccountId"
+      SourceArn: !Sub "arn:aws:s3:::${BucketNameProcessed}"
+
+#  DDBTable:
+#    Type: AWS::DynamoDB::Table
+#    Properties:
+#      AttributeDefinitions:
+#        -
+#          AttributeName: "LineId"
+#          AttributeType: "S"
+#        -
+#          AttributeName: "LineName"
+#          AttributeType: "S"
+#        -
+#          AttributeName: "LineUrl"
+#          AttributeType: "S"
+#      KeySchema:
+#        -
+#          AttributeName: "LineId"
+#          KeyType: "HASH"
+#        -
+#          AttributeName: "LineName"
+#          KeyType: "RANGE"
+#        -
+#          AttributeName: "LineUrl"
+#          KeyType: "HASH"
+#
+#      ProvisionedThroughput:
+#        ReadCapacityUnits: 5
+#        WriteCapacityUnits: 5
+#
+#  WriteCapacityScalableTarget:
+#    Type: AWS::ApplicationAutoScaling::ScalableTarget
+#    Properties:
+#      MaxCapacity: 15
+#      MinCapacity: 5
+#      ResourceId: !Join
+#        - /
+#        - - table
+#          - !Ref DDBTable
+#      RoleARN: !GetAtt ScalingRole.Arn
+#      ScalableDimension: dynamodb:table:WriteCapacityUnits
+#      ServiceNamespace: dynamodb
+#
+#  ScalingRole:
+#    Type: AWS::IAM::Role
+#    Properties:
+#      AssumeRolePolicyDocument:
+#        Version: "2012-10-17"
+#        Statement:
+#          - Effect: "Allow"
+#            Principal:
+#              Service:
+#                - application-autoscaling.amazonaws.com
+#            Action:
+#              - "sts:AssumeRole"
+#      Path: "/"
+#      Policies:
+#        - PolicyName: "root"
+#          PolicyDocument:
+#            Version: "2012-10-17"
+#            Statement:
+#              - Effect: "Allow"
+#                Action:
+#                  - "dynamodb:DescribeTable"
+#                  - "dynamodb:UpdateTable"
+#                  - "cloudwatch:PutMetricAlarm"
+#                  - "cloudwatch:DescribeAlarms"
+#                  - "cloudwatch:GetMetricStatistics"
+#                  - "cloudwatch:SetAlarmState"
+#                  - "cloudwatch:DeleteAlarms"
+#                Resource: "*"
+#
+#  WriteScalingPolicy:
+#    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+#    Properties:
+#      PolicyName: WriteAutoScalingPolicy
+#      PolicyType: TargetTrackingScaling
+#      ScalingTargetId: !Ref WriteCapacityScalableTarget
+#      TargetTrackingScalingPolicyConfiguration:
+#        TargetValue: 50.0
+#        ScaleInCooldown: 60
+#        ScaleOutCooldown: 60
+#        PredefinedMetricSpecification:
+#          PredefinedMetricType: DynamoDBWriteCapacityUtilization
