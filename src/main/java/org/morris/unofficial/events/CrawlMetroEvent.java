@@ -5,29 +5,20 @@ import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.lambda.runtime.events.ScheduledEvent;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
-import com.amazonaws.services.s3.model.S3Object;
-import com.amazonaws.services.s3.model.GetObjectRequest;
-import com.amazonaws.services.s3.model.S3ObjectSummary;
-import com.amazonaws.services.s3.model.ObjectListing;
-import com.amazonaws.services.s3.model.Bucket;
-import com.amazonaws.services.s3.model.PutObjectRequest;
+import com.amazonaws.services.s3.model.*;
 import org.joda.time.DateTime;
 
-import java.io.InputStreamReader;
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.PrintWriter;
-import java.io.IOException;
+import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.Date;
 import java.util.List;
 
 public class CrawlMetroEvent {
     final String REGION = System.getenv("REGION"); // region
     final String BUCKET = System.getenv("UNPROCESSED_BUCKET_NAME");
     final String GET_REQUEST = "GET";
-    final String ROUTES_DOC_FILE = "/tmp/routes_doc.txt";
+    final String ROUTES_DOC_FILE = "routes_doc.txt";
+    final String TMP_ROUTES_DOC_FILE = "/tmp/routes_doc.txt";
     final String METRO_SCHEDULE_URL = "https://kingcounty.gov/depts/transportation/metro/schedules-maps.aspx";
 
     public String handleRequest(ScheduledEvent event, Context context) {
@@ -41,43 +32,36 @@ public class CrawlMetroEvent {
 
         if (!bucketContainsDocuments()) {
             // contains no documents, crawl immediately
+            logger.log("no unprocessed documents, crawling seattle metro...");
             putS3File();
         } else {
-            if (bucketContainsDocuments()) {
-                // documents exists - crawl and match against last crawled document
-                // if they match then there's no use recording the document as it'll
-                // only be a copy
-                S3Object latestDocumentObject = getMostRecentDocument();
+            logger.log("getting lastest document");
+            S3Object latestDocumentObject = getMostRecentDocumentObject(logger);
+            logger.log("latest document date: " + latestDocumentObject.getObjectMetadata().getLastModified());
 
-                // compare the text from the latest object and dumped document sitting in /tmp
-            }
+            // compare the text from the latest object and dumped document sitting in /tmp
         }
         return "success";
     }
 
-    private S3Object getMostRecentDocument() {
-        AmazonS3 s3Client = getS3Client();
-        ObjectListing objectListing = s3Client.listObjects(BUCKET);
-        List<S3ObjectSummary> objectSummaries = objectListing.getObjectSummaries();
+    private S3Object getMostRecentDocumentObject(LambdaLogger logger) {
+        // we'll just need to pull the latest document by pulling the document from 7 days ago
+        // which is the last document upload
+        return getMostRecentObjectInBucket(logger);
+    }
 
-        // Get the first date by pulling the first objects last modified date
-        Date currentDate = objectSummaries.get(0).getLastModified();
-        S3ObjectSummary latestObjectSummary = null;
-        for (S3ObjectSummary objectSummary : objectSummaries.subList(1, objectSummaries.size())) {
-            if (objectSummary.getLastModified().compareTo(currentDate) > 0) {
-                // it is greater - last modified date comes after first date
-                latestObjectSummary = objectSummary;
-                // update the date
-                currentDate = latestObjectSummary.getLastModified();
-            }
-        }
-        // return the object
-        S3Object latestDocumentObject = null;
-        if (latestObjectSummary != null) {
-            GetObjectRequest getObjectRequest = new GetObjectRequest(latestObjectSummary.getKey(), BUCKET);
-            latestDocumentObject = s3Client.getObject(getObjectRequest);
-        }
-        return latestDocumentObject;
+    private S3Object getMostRecentObjectInBucket(LambdaLogger logger) {
+        AmazonS3 s3Client = getS3Client();
+        // prefix example bucketName/docs/2022/10/8 - get current prefix based on today's date
+
+        // this function is triggered because it's crawl day and crawl day is every 7 days, so let's
+        // build the date from 7 days ago, the last crawl day, and query for lastest document
+        String documentFromSevenDaysAgoUri = getSevenDayPastPrefix() + ROUTES_DOC_FILE;
+        logger.log("BucketFrom7DaysAgoUri: " + documentFromSevenDaysAgoUri);
+        GetObjectRequest getObjectRequest = new GetObjectRequest(BUCKET, documentFromSevenDaysAgoUri);
+        S3Object object = s3Client.getObject(getObjectRequest);
+        s3Client.shutdown();
+        return object;
     }
 
     private boolean bucketContainsDocuments() {
@@ -118,10 +102,10 @@ public class CrawlMetroEvent {
             connection.disconnect();
 
             // write to file
-            PrintWriter printWriter = new PrintWriter(ROUTES_DOC_FILE);
+            PrintWriter printWriter = new PrintWriter(TMP_ROUTES_DOC_FILE);
             printWriter.println(content);
         } catch (IOException e) {
-            logger.log(String.format("Error writing route document dump to '%s': ", ROUTES_DOC_FILE + e.getMessage()));
+            logger.log(String.format("Error writing route document dump to '%s': ", TMP_ROUTES_DOC_FILE + e.getMessage()));
         }
     }
 
@@ -129,8 +113,8 @@ public class CrawlMetroEvent {
      * Loads the SEA metro document dump to the unprocessed bucket in S3.
      */
     private void putS3File() {
-        String fileName = getPrefix() + new File(ROUTES_DOC_FILE).getName();
-        PutObjectRequest putObjectRequest = new PutObjectRequest(BUCKET, fileName, new File(ROUTES_DOC_FILE));
+        String fileName = getPrefix() + new File(TMP_ROUTES_DOC_FILE).getName();
+        PutObjectRequest putObjectRequest = new PutObjectRequest(BUCKET, fileName, new File(TMP_ROUTES_DOC_FILE));
         AmazonS3 s3 = getS3Client();
         s3.putObject(putObjectRequest);
         s3.shutdown();
@@ -156,6 +140,14 @@ public class CrawlMetroEvent {
         String year = String.valueOf(DateTime.now().getYear());
         String month = String.valueOf(DateTime.now().getMonthOfYear());
         String day = String.valueOf(DateTime.now().getDayOfMonth());
+
+        return String.format("docs/%s/%s/%s/", year, month, day);
+    }
+
+    private String getSevenDayPastPrefix() {
+        String year = String.valueOf(DateTime.now().minusDays(7).getYear());
+        String month = String.valueOf(DateTime.now().minusDays(7).getMonthOfYear());
+        String day = String.valueOf(DateTime.now().minusDays(7).getDayOfMonth());
 
         return String.format("docs/%s/%s/%s/", year, month, day);
     }
