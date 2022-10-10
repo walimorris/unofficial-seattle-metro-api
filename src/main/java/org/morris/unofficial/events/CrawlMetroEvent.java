@@ -11,6 +11,8 @@ import org.joda.time.DateTime;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.List;
 
 public class CrawlMetroEvent {
@@ -19,6 +21,8 @@ public class CrawlMetroEvent {
     final String GET_REQUEST = "GET";
     final String ROUTES_DOC_FILE = "routes_doc.txt";
     final String TMP_ROUTES_DOC_FILE = "/tmp/routes_doc.txt";
+    final String TMP_RECENT_ROUTES_DOC_FILE = "/tmp/recent_routes_doc.txt";
+    final String END_ROUTES_MARKER = "<!-- end #routes -->";
     final String METRO_SCHEDULE_URL = "https://kingcounty.gov/depts/transportation/metro/schedules-maps.aspx";
 
     public String handleRequest(ScheduledEvent event, Context context) {
@@ -29,7 +33,6 @@ public class CrawlMetroEvent {
 
         // Do we need to crawl the data - if no unprocessed document exists then yes
         // If document exists, let's match up against new crawled .txt in /tmp
-
         if (!bucketContainsDocuments()) {
             // contains no documents, crawl immediately
             logger.log("no unprocessed documents, crawling seattle metro...");
@@ -40,8 +43,29 @@ public class CrawlMetroEvent {
             logger.log("latest document date: " + latestDocumentObject.getObjectMetadata().getLastModified());
 
             // compare the text from the latest object and dumped document sitting in /tmp
+            boolean isScanMatch = scanLatestMetroDocumentAgainstRecentlyCrawledDocument(logger);
+            logger.log("Scanned Match: " + isScanMatch);
         }
         return "success";
+    }
+
+    private boolean scanLatestMetroDocumentAgainstRecentlyCrawledDocument(LambdaLogger logger) {
+        try {
+            // split the texts after routes end - we're only checking that routes match. Any content in the
+            // document after the routes may be dynamic and changed often.
+            String latestDocumentTxt = new String(Files.readAllBytes(Paths.get(TMP_RECENT_ROUTES_DOC_FILE)))
+                    .split(END_ROUTES_MARKER)[0];
+
+            String recentDocumentTxt = new String(Files.readAllBytes(Paths.get(TMP_ROUTES_DOC_FILE)))
+                    .split(END_ROUTES_MARKER)[0];
+            if (latestDocumentTxt.equals(recentDocumentTxt)) {
+                return true;
+            }
+        } catch (IOException e) {
+            logger.log(String.format("Error reading and comparing latest document and recent dump from /tmp directory: %s", e.getMessage()));
+            return false;
+        }
+        return false;
     }
 
     private S3Object getMostRecentDocumentObject(LambdaLogger logger) {
@@ -60,6 +84,24 @@ public class CrawlMetroEvent {
         logger.log("BucketFrom7DaysAgoUri: " + documentFromSevenDaysAgoUri);
         GetObjectRequest getObjectRequest = new GetObjectRequest(BUCKET, documentFromSevenDaysAgoUri);
         S3Object object = s3Client.getObject(getObjectRequest);
+
+        try {
+            // print content to /tmp
+            BufferedReader recentDocumentReader = new BufferedReader(new InputStreamReader(object.getObjectContent()));
+            String recentDocumentLine;
+            StringBuffer content = new StringBuffer();
+            while ((recentDocumentLine = recentDocumentReader.readLine()) != null) {
+                content.append(recentDocumentLine);
+            }
+            recentDocumentReader.close();
+            // write to file
+            PrintWriter printWriter = new PrintWriter(TMP_RECENT_ROUTES_DOC_FILE);
+            printWriter.println(content);
+        } catch (IOException e) {
+            logger.log("Error processing recent document content: " + e.getMessage());
+        }
+
+
         s3Client.shutdown();
         return object;
     }
