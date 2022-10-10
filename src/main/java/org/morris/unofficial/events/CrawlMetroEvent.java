@@ -14,6 +14,7 @@ import org.joda.time.DateTime;
 
 import java.io.File;
 import java.io.PrintWriter;
+import java.io.InputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -38,29 +39,32 @@ public class CrawlMetroEvent {
         logger.log(String.format("Seattle Metro crawl event triggered: %s", event.getId()));
 
         printMetroDumpToTmp(logger);
-
-        // Do we need to crawl the data - if no unprocessed document exists then yes
-        // If document exists, let's match up against new crawled .txt in /tmp
         if (!bucketContainsDocuments()) {
-            // contains no documents, crawl immediately
-            logger.log("no unprocessed documents, crawling seattle metro...");
-            putS3File();
+            putS3File(); // contains no documents, crawl immediately
         } else {
-            logger.log("getting lastest document");
+            logger.log("getting latest document");
             S3Object latestDocumentObject = getMostRecentDocumentObject(logger);
             logger.log("latest document date: " + latestDocumentObject.getObjectMetadata().getLastModified());
 
-            // compare the text from the latest object and dumped document sitting in /tmp
             boolean isScanMatch = scanLatestMetroDocumentAgainstRecentlyCrawledDocument(logger);
             logger.log("Scanned Match: " + isScanMatch);
         }
         return "success";
     }
 
+    /**
+     * Scans the latest unprocessed crawled document and recently crawled document from the SEA metro
+     * site. Both documents should have already been written to both /tmp/recent_routes_doc.txt and
+     * /tmp/routes_doc.txt, respectively. The text in both instances are split after a string of
+     * unique characters, as we only want the document up until the end of the routes. Any data after
+     * this point may be dynamic and changed often.
+     *
+     * @param logger {@link LambdaLogger}
+     *
+     * @return boolean
+     */
     private boolean scanLatestMetroDocumentAgainstRecentlyCrawledDocument(LambdaLogger logger) {
         try {
-            // split the texts after routes end - we're only checking that routes match. Any content in the
-            // document after the routes may be dynamic and changed often.
             String latestDocumentTxt = new String(Files.readAllBytes(Paths.get(TMP_RECENT_ROUTES_DOC_FILE)))
                     .split(END_ROUTES_MARKER)[0];
 
@@ -70,50 +74,41 @@ public class CrawlMetroEvent {
                 return true;
             }
         } catch (IOException e) {
-            logger.log(String.format("Error reading and comparing latest document and recent dump from /tmp directory: %s", e.getMessage()));
+            logger.log(String.format("Error scanning latest documents from /tmp directory: %s", e.getMessage()));
             return false;
         }
         return false;
     }
 
+    /**
+     * Returns the latest {@link S3Object} which is a dump of the unprocessed data from SEA metro site.
+     * The latest document will be an {@link S3Object} from 7 days prior to the current date. This is
+     * due to the {@link CrawlMetroEvent} being triggered every 7 days and uploading the crawled data
+     * to the unprocessed S3 Bucket.
+     * <p></p>
+     * <p>
+     *     prefix example: bucketName/docs/2022/10/8 or bucketName/docs/2022/1/1
+     * </p>
+     *
+     * @param logger {@link LambdaLogger}
+     * @return {@link S3Object}
+     */
     private S3Object getMostRecentDocumentObject(LambdaLogger logger) {
-        // we'll just need to pull the latest document by pulling the document from 7 days ago
-        // which is the last document upload
-        return getMostRecentObjectInBucket(logger);
-    }
-
-    private S3Object getMostRecentObjectInBucket(LambdaLogger logger) {
         AmazonS3 s3Client = getS3Client();
-        // prefix example bucketName/docs/2022/10/8 - get current prefix based on today's date
-
-        // this function is triggered because it's crawl day and crawl day is every 7 days, so let's
-        // build the date from 7 days ago, the last crawl day, and query for lastest document
         String documentFromSevenDaysAgoUri = getSevenDayPastPrefix() + ROUTES_DOC_FILE;
-        logger.log("BucketFrom7DaysAgoUri: " + documentFromSevenDaysAgoUri);
         GetObjectRequest getObjectRequest = new GetObjectRequest(BUCKET, documentFromSevenDaysAgoUri);
         S3Object object = s3Client.getObject(getObjectRequest);
-
-        try {
-            // print content to /tmp
-            BufferedReader recentDocumentReader = new BufferedReader(new InputStreamReader(object.getObjectContent()));
-            String recentDocumentLine;
-            StringBuffer content = new StringBuffer();
-            while ((recentDocumentLine = recentDocumentReader.readLine()) != null) {
-                content.append(recentDocumentLine);
-            }
-            recentDocumentReader.close();
-            // write to file
-            PrintWriter printWriter = new PrintWriter(TMP_RECENT_ROUTES_DOC_FILE);
-            printWriter.println(content);
-        } catch (IOException e) {
-            logger.log("Error processing recent document content: " + e.getMessage());
-        }
-
-
+        printToFile(object.getObjectContent(), TMP_RECENT_ROUTES_DOC_FILE, logger);
         s3Client.shutdown();
         return object;
     }
 
+    /**
+     * Checks if the unprocessed documents {@link Bucket} exists. If so, checks that
+     * the bucket contains objects (documents from SEA metro dump).
+     *
+     * @return boolean
+     */
     private boolean bucketContainsDocuments() {
         AmazonS3 s3Client = getS3Client();
         Bucket unprocessedBucket = null;
@@ -142,20 +137,35 @@ public class CrawlMetroEvent {
             HttpURLConnection connection = (HttpURLConnection) metroScheduleUrl.openConnection();
             connection.setRequestMethod(GET_REQUEST);
 
-            BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+            printToFile(connection.getInputStream(), TMP_ROUTES_DOC_FILE, logger);
+            connection.disconnect();
+        } catch (IOException e) {
+            logger.log(String.format("Error writing route document dump to '%s': ", TMP_ROUTES_DOC_FILE + e.getMessage()));
+        }
+    }
+
+    /**
+     * Prints the contents of a {@link InputStream} to a file path.
+     *
+     * @param inputStream {@link InputStream} content
+     * @param strPath {@link String} Path to save content as file
+     * @param logger {@link LambdaLogger}
+     */
+    private void printToFile(InputStream inputStream, String strPath, LambdaLogger logger) {
+        try {
+            BufferedReader in = new BufferedReader(new InputStreamReader(inputStream));
             String line;
             StringBuffer content = new StringBuffer();
             while ((line = in.readLine()) != null) {
                 content.append(line);
             }
             in.close();
-            connection.disconnect();
 
             // write to file
-            PrintWriter printWriter = new PrintWriter(TMP_ROUTES_DOC_FILE);
+            PrintWriter printWriter = new PrintWriter(strPath);
             printWriter.println(content);
         } catch (IOException e) {
-            logger.log(String.format("Error writing route document dump to '%s': ", TMP_ROUTES_DOC_FILE + e.getMessage()));
+            logger.log(String.format("Error writing route document dump to '%s': ", strPath + e.getMessage()));
         }
     }
 
@@ -187,17 +197,37 @@ public class CrawlMetroEvent {
      * @return {@link String} a prefixed string in form YYYY/DD(D)/MM(M) 2022/8/10 or (2022/12/1)
      */
     private String getPrefix() {
-        String year = String.valueOf(DateTime.now().getYear());
-        String month = String.valueOf(DateTime.now().getMonthOfYear());
-        String day = String.valueOf(DateTime.now().getDayOfMonth());
+        String year = String.valueOf(DateTime.now()
+                .getYear());
+
+        String month = String.valueOf(DateTime.now()
+                .getMonthOfYear());
+
+        String day = String.valueOf(DateTime.now()
+                .getDayOfMonth());
 
         return String.format("docs/%s/%s/%s/", year, month, day);
     }
 
+    /**
+     * Creates a prefix for the unprocessed documents seven days prior to the current day in the
+     * unprocessed S3 bucket for better query results.
+     *
+     * @return {@link String} a prefixed string seven days prior to the current date in form
+     * YYYY/DD(D)/MM(M) 2022/8/10 or (2022/12/1)
+     */
     private String getSevenDayPastPrefix() {
-        String year = String.valueOf(DateTime.now().minusDays(7).getYear());
-        String month = String.valueOf(DateTime.now().minusDays(7).getMonthOfYear());
-        String day = String.valueOf(DateTime.now().minusDays(7).getDayOfMonth());
+        String year = String.valueOf(DateTime.now()
+                .minusDays(7)
+                .getYear());
+
+        String month = String.valueOf(DateTime.now()
+                .minusDays(7)
+                .getMonthOfYear());
+
+        String day = String.valueOf(DateTime.now()
+                .minusDays(7)
+                .getDayOfMonth());
 
         return String.format("docs/%s/%s/%s/", year, month, day);
     }
