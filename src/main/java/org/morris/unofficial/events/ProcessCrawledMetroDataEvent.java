@@ -26,11 +26,11 @@ import java.util.Arrays;
 import java.util.ArrayList;
 
 public class ProcessCrawledMetroDataEvent {
-    final String REGION = System.getenv("REGION");
-    final String UNPROCESSED_BUCKET = System.getenv("UNPROCESSED_BUCKET_NAME");
-    final String PROCESSED_BUCKET = System.getenv("PROCESSED_BUCKET_NAME");
-    final String JSON_ROUTES_DOC_FILE = "/tmp/routes_doc.json";
-    final String METRO_PREFIX = "https://kingcounty.gov";
+    final private static String REGION = System.getenv("REGION");
+    final private static String UNPROCESSED_BUCKET = System.getenv("UNPROCESSED_BUCKET_NAME");
+    final private static String PROCESSED_BUCKET = System.getenv("PROCESSED_BUCKET_NAME");
+    final private static String JSON_ROUTES_DOC_FILE = "/tmp/routes_doc.json";
+    final private static String METRO_PREFIX = "https://kingcounty.gov";
 
     public String handleRequest(S3Event event, Context context) {
         LambdaLogger logger = context.getLogger();

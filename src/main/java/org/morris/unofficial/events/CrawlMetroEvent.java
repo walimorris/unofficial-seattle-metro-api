@@ -25,14 +25,15 @@ import java.nio.file.Paths;
 import java.util.List;
 
 public class CrawlMetroEvent {
-    final String REGION = System.getenv("REGION"); // region
-    final String BUCKET = System.getenv("UNPROCESSED_BUCKET_NAME");
-    final String GET_REQUEST = "GET";
-    final String ROUTES_DOC_FILE = "routes_doc.txt";
-    final String TMP_ROUTES_DOC_FILE = "/tmp/routes_doc.txt";
-    final String TMP_RECENT_ROUTES_DOC_FILE = "/tmp/recent_routes_doc.txt";
-    final String END_ROUTES_MARKER = "<!-- end #routes -->";
-    final String METRO_SCHEDULE_URL = "https://kingcounty.gov/depts/transportation/metro/schedules-maps.aspx";
+    final static private String REGION = System.getenv("REGION"); // region
+    final static private String DEFAULT_REGION = "us-west-2";
+    final static private String BUCKET = System.getenv("UNPROCESSED_BUCKET_NAME");
+    final static private String METRO_SCHEDULE_URL = "https://kingcounty.gov/depts/transportation/metro/schedules-maps.aspx";
+    final static private String GET_REQUEST = "GET";
+    final static private String ROUTES_DOC_FILE = "routes_doc.txt";
+    final static private String TMP_ROUTES_DOC_FILE = "/tmp/routes_doc.txt";
+    final static private String TMP_RECENT_ROUTES_DOC_FILE = "/tmp/recent_routes_doc.txt";
+    final static public String END_ROUTES_MARKER = "<!-- end #routes -->";
 
     public String handleRequest(ScheduledEvent event, Context context) {
         LambdaLogger logger = context.getLogger();
@@ -186,7 +187,7 @@ public class CrawlMetroEvent {
      */
     private AmazonS3 getS3Client() {
         return AmazonS3ClientBuilder.standard()
-                .withRegion(REGION)
+                .withRegion(getRegion())
                 .build();
     }
 
@@ -230,5 +231,14 @@ public class CrawlMetroEvent {
                 .getDayOfMonth());
 
         return String.format("docs/%s/%s/%s/", year, month, day);
+    }
+
+    /**
+     * Get region or default to us-west-2
+     *
+     * @return {@link String} region
+     */
+    private String getRegion() {
+        return REGION == null ? DEFAULT_REGION : REGION;
     }
 }
