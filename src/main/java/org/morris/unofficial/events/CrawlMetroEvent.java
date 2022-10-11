@@ -5,10 +5,11 @@ import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.lambda.runtime.events.ScheduledEvent;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
-import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.PutObjectRequest;
+import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.Bucket;
+import com.amazonaws.services.s3.model.AmazonS3Exception;
 import com.amazonaws.services.s3.model.ObjectListing;
 import org.joda.time.DateTime;
 
@@ -43,12 +44,17 @@ public class CrawlMetroEvent {
         if (!bucketContainsDocuments()) {
             putS3File(); // contains no documents, crawl immediately
         } else {
-            logger.log("getting latest document");
             S3Object latestDocumentObject = getMostRecentDocumentObject(logger);
             logger.log("latest document date: " + latestDocumentObject.getObjectMetadata().getLastModified());
 
             boolean isScanMatch = scanLatestMetroDocumentAgainstRecentlyCrawledDocument(logger);
             logger.log("Scanned Match: " + isScanMatch);
+
+            // unload changed dump to unprocessed store i.e. the dump currently in /tmp/routes_doc
+            if (!isScanMatch) {
+                logger.log("not a current match - uploading new dump document");
+                putS3File();
+            }
         }
         return "success";
     }
@@ -85,7 +91,10 @@ public class CrawlMetroEvent {
      * Returns the latest {@link S3Object} which is a dump of the unprocessed data from SEA metro site.
      * The latest document will be an {@link S3Object} from 7 days prior to the current date. This is
      * due to the {@link CrawlMetroEvent} being triggered every 7 days and uploading the crawled data
-     * to the unprocessed S3 Bucket.
+     * to the unprocessed S3 Bucket. If no document dump was created on the prior 7 days, then 7 days
+     * prior to that date is checked. Hence, documents are retraced by 7 days based on the prefix in
+     * the respect S3 bucket until the last known document dump is found.
+     *
      * <p></p>
      * <p>
      *     prefix example: bucketName/docs/2022/10/8 or bucketName/docs/2022/1/1
@@ -96,9 +105,19 @@ public class CrawlMetroEvent {
      */
     private S3Object getMostRecentDocumentObject(LambdaLogger logger) {
         AmazonS3 s3Client = getS3Client();
-        String documentFromSevenDaysAgoUri = getSevenDayPastPrefix() + ROUTES_DOC_FILE;
-        GetObjectRequest getObjectRequest = new GetObjectRequest(BUCKET, documentFromSevenDaysAgoUri);
-        S3Object object = s3Client.getObject(getObjectRequest);
+        S3Object object = null;
+        int days = 7;
+
+        while (object == null) {
+            String documentFromXDaysAgoUri = getPastPrefix(days) + ROUTES_DOC_FILE;
+            GetObjectRequest getObjectRequest = new GetObjectRequest(BUCKET, documentFromXDaysAgoUri);
+            try {
+                object = s3Client.getObject(getObjectRequest);
+            } catch (AmazonS3Exception e) {
+                logger.log("key does not exist: " + documentFromXDaysAgoUri);
+            }
+            days = days + 7;
+        }
         printToFile(object.getObjectContent(), TMP_RECENT_ROUTES_DOC_FILE, logger);
         s3Client.shutdown();
         return object;
@@ -211,23 +230,25 @@ public class CrawlMetroEvent {
     }
 
     /**
-     * Creates a prefix for the unprocessed documents seven days prior to the current day in the
-     * unprocessed S3 bucket for better query results.
+     * Creates a prefix date for the unprocessed documents x days prior to the current
+     * day in the unprocessed S3 bucket for better query results, x is the number of days.
      *
-     * @return {@link String} a prefixed string seven days prior to the current date in form
+     * @param days the number of days prior to the current date
+     *
+     * @return {@link String} a prefixed string date x days prior to the current date in form
      * YYYY/DD(D)/MM(M) 2022/8/10 or (2022/12/1)
      */
-    private String getSevenDayPastPrefix() {
+    private String getPastPrefix(int days) {
         String year = String.valueOf(DateTime.now()
-                .minusDays(7)
+                .minusDays(days)
                 .getYear());
 
         String month = String.valueOf(DateTime.now()
-                .minusDays(7)
+                .minusDays(days)
                 .getMonthOfYear());
 
         String day = String.valueOf(DateTime.now()
-                .minusDays(7)
+                .minusDays(days)
                 .getDayOfMonth());
 
         return String.format("docs/%s/%s/%s/", year, month, day);
