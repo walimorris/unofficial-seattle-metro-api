@@ -4,22 +4,20 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.lambda.runtime.events.S3Event;
 import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.morris.unofficial.models.MetroLine;
+import org.morris.unofficial.utils.ProcessEventUtils;
 
 import java.io.IOException;
 
 public class ProcessCrawledMetroScheduleDataEvent {
-    final private static String REGION = System.getenv("REGION");
-    final static private String DEFAULT_REGION = "us-west-2";
     final private static String PROCESSED_BUCKET = System.getenv("PROCESSED_BUCKET_NAME");
 
     public String handleRequest(S3Event event, Context context) {
         LambdaLogger logger = context.getLogger();
-        AmazonS3 s3Client = getS3Client();
+        AmazonS3 s3Client = ProcessEventUtils.getS3Client();
 
         // lets get the processed data in a file
         MetroLine metroLine = getMetroLineAsPojoFromJson(event, s3Client, logger);
@@ -69,20 +67,5 @@ public class ProcessCrawledMetroScheduleDataEvent {
 
         GetObjectRequest getObjectRequest = new GetObjectRequest(PROCESSED_BUCKET, eventKey);
         return client.getObject(getObjectRequest);
-    }
-
-    private AmazonS3 getS3Client() {
-        return AmazonS3ClientBuilder.standard()
-                .withRegion(getRegion())
-                .build();
-    }
-
-    /**
-     * Get region or default to us-west-2
-     *
-     * @return {@link String} region
-     */
-    private String getRegion() {
-        return REGION == null ? DEFAULT_REGION : REGION;
     }
 }

@@ -4,14 +4,13 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.lambda.runtime.events.ScheduledEvent;
 import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.Bucket;
 import com.amazonaws.services.s3.model.AmazonS3Exception;
 import com.amazonaws.services.s3.model.ObjectListing;
-import org.joda.time.DateTime;
+import org.morris.unofficial.utils.ProcessEventUtils;
 
 import java.io.File;
 import java.io.PrintWriter;
@@ -26,8 +25,6 @@ import java.nio.file.Paths;
 import java.util.List;
 
 public class CrawlMetroEvent {
-    final static private String REGION = System.getenv("REGION"); // region
-    final static private String DEFAULT_REGION = "us-west-2";
     final static private String BUCKET = System.getenv("UNPROCESSED_BUCKET_NAME");
     final static private String METRO_SCHEDULE_URL = "https://kingcounty.gov/depts/transportation/metro/schedules-maps.aspx";
     final static private String GET_REQUEST = "GET";
@@ -104,12 +101,12 @@ public class CrawlMetroEvent {
      * @return {@link S3Object}
      */
     private S3Object getMostRecentDocumentObject(LambdaLogger logger) {
-        AmazonS3 s3Client = getS3Client();
+        AmazonS3 s3Client = ProcessEventUtils.getS3Client();
         S3Object object = null;
         int days = 7;
 
         while (object == null) {
-            String documentFromXDaysAgoUri = getPastPrefix(days) + ROUTES_DOC_FILE;
+            String documentFromXDaysAgoUri = ProcessEventUtils.getPastPrefix(days) + ROUTES_DOC_FILE;
             GetObjectRequest getObjectRequest = new GetObjectRequest(BUCKET, documentFromXDaysAgoUri);
             try {
                 object = s3Client.getObject(getObjectRequest);
@@ -130,7 +127,7 @@ public class CrawlMetroEvent {
      * @return boolean
      */
     private boolean bucketContainsDocuments() {
-        AmazonS3 s3Client = getS3Client();
+        AmazonS3 s3Client = ProcessEventUtils.getS3Client();
         Bucket unprocessedBucket = null;
         List<Bucket> buckets = s3Client.listBuckets();
         for (Bucket bucket : buckets) {
@@ -193,73 +190,10 @@ public class CrawlMetroEvent {
      * Loads the SEA metro document dump to the unprocessed bucket in S3.
      */
     private void putS3File() {
-        String fileName = getPrefix() + new File(TMP_ROUTES_DOC_FILE).getName();
+        String fileName = ProcessEventUtils.getPrefix() + new File(TMP_ROUTES_DOC_FILE).getName();
         PutObjectRequest putObjectRequest = new PutObjectRequest(BUCKET, fileName, new File(TMP_ROUTES_DOC_FILE));
-        AmazonS3 s3 = getS3Client();
+        AmazonS3 s3 = ProcessEventUtils.getS3Client();
         s3.putObject(putObjectRequest);
         s3.shutdown();
-    }
-
-    /**
-     * Get {@link AmazonS3} client
-     * @return {@link AmazonS3}
-     */
-    private AmazonS3 getS3Client() {
-        return AmazonS3ClientBuilder.standard()
-                .withRegion(getRegion())
-                .build();
-    }
-
-    /**
-     * Creates a prefix for the unprocessed documents in the unprocessed S3 bucket for
-     * better query results and future data processing and recording insights.
-     *
-     * @return {@link String} a prefixed string in form YYYY/DD(D)/MM(M) 2022/8/10 or (2022/12/1)
-     */
-    private String getPrefix() {
-        String year = String.valueOf(DateTime.now()
-                .getYear());
-
-        String month = String.valueOf(DateTime.now()
-                .getMonthOfYear());
-
-        String day = String.valueOf(DateTime.now()
-                .getDayOfMonth());
-
-        return String.format("docs/%s/%s/%s/", year, month, day);
-    }
-
-    /**
-     * Creates a prefix date for the unprocessed documents x days prior to the current
-     * day in the unprocessed S3 bucket for better query results, x is the number of days.
-     *
-     * @param days the number of days prior to the current date
-     *
-     * @return {@link String} a prefixed string date x days prior to the current date in form
-     * YYYY/DD(D)/MM(M) 2022/8/10 or (2022/12/1)
-     */
-    private String getPastPrefix(int days) {
-        String year = String.valueOf(DateTime.now()
-                .minusDays(days)
-                .getYear());
-
-        String month = String.valueOf(DateTime.now()
-                .minusDays(days)
-                .getMonthOfYear());
-
-        String day = String.valueOf(DateTime.now()
-                .minusDays(days)
-                .getDayOfMonth());
-
-        return String.format("docs/%s/%s/%s/", year, month, day);
-    }
-
-    /**
-     * Get region or default to us-west-2
-     *
-     * @return {@link String} region
-     */
-    private String getRegion() {
-        return REGION == null ? DEFAULT_REGION : REGION;
     }
 }

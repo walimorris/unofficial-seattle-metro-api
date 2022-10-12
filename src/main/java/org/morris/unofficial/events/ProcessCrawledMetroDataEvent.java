@@ -4,13 +4,12 @@ import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.lambda.runtime.events.S3Event;
 import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
-import org.joda.time.DateTime;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.morris.unofficial.utils.ProcessEventUtils;
 
 import java.io.File;
 import java.io.IOException;
@@ -26,7 +25,6 @@ import java.util.Arrays;
 import java.util.ArrayList;
 
 public class ProcessCrawledMetroDataEvent {
-    final private static String REGION = System.getenv("REGION");
     final private static String UNPROCESSED_BUCKET = System.getenv("UNPROCESSED_BUCKET_NAME");
     final private static String PROCESSED_BUCKET = System.getenv("PROCESSED_BUCKET_NAME");
     final private static String JSON_ROUTES_DOC_FILE = "/tmp/routes_doc.json";
@@ -34,8 +32,9 @@ public class ProcessCrawledMetroDataEvent {
 
     public String handleRequest(S3Event event, Context context) {
         LambdaLogger logger = context.getLogger();
+        AmazonS3 s3Client = ProcessEventUtils.getS3Client();
 
-        InputStreamReader unprocessedDocumentInputStreamReader = getUnprocessedDocumentInputStreamReader(event);
+        InputStreamReader unprocessedDocumentInputStreamReader = getUnprocessedDocumentInputStreamReader(event, s3Client);
         String content = collectInitialContent(unprocessedDocumentInputStreamReader, logger);
 
         // remove the first index in split as it contains content before
@@ -53,7 +52,7 @@ public class ProcessCrawledMetroDataEvent {
         // feed into an array to prepare to input to file
         JSONArray lineObjectsArray = collectLineJSONObjectsInArray(lineObjects);
         printTransformedMetroDataToTmp(lineObjectsArray, logger);
-        putS3File();
+        putS3File(s3Client);
 
         return "success";
     }
@@ -130,12 +129,11 @@ public class ProcessCrawledMetroDataEvent {
     /**
      * Load newly transformed JSON file in /tmp to processed s3 bucket.
      */
-    private void putS3File() {
-        String fileName = getPrefix() + new File(JSON_ROUTES_DOC_FILE).getName();
+    private void putS3File(AmazonS3 s3Client) {
+        String fileName = ProcessEventUtils.getPrefix() + new File(JSON_ROUTES_DOC_FILE).getName();
         PutObjectRequest putObjectRequest = new PutObjectRequest(PROCESSED_BUCKET, fileName, new File(JSON_ROUTES_DOC_FILE));
-        AmazonS3 s3 = getS3Client();
-        s3.putObject(putObjectRequest);
-        s3.shutdown();
+        s3Client.putObject(putObjectRequest);
+        s3Client.shutdown();
     }
 
     private List<JSONObject> collectLineJSONObjectsInList(Map<String, String> routes, Map<String, String> routeUrls) {
@@ -154,7 +152,7 @@ public class ProcessCrawledMetroDataEvent {
         return lineObjects;
     }
 
-    private InputStreamReader getUnprocessedDocumentInputStreamReader(S3Event event) {
+    private InputStreamReader getUnprocessedDocumentInputStreamReader(S3Event event, AmazonS3 s3Client) {
         // Only one event will be processed from triggered reader
         String unprocessedDocumentKey = event.getRecords()
                 .get(0)
@@ -164,15 +162,9 @@ public class ProcessCrawledMetroDataEvent {
 
         // get the object from the unprocessed document bucket
         GetObjectRequest getObjectRequest = new GetObjectRequest(UNPROCESSED_BUCKET, unprocessedDocumentKey);
-        S3Object unprocessedDocument = getS3Client().getObject(getObjectRequest);
+        S3Object unprocessedDocument = s3Client.getObject(getObjectRequest);
         return new InputStreamReader(unprocessedDocument.getObjectContent(),
                 StandardCharsets.UTF_8);
-    }
-
-    private AmazonS3 getS3Client() {
-        return AmazonS3ClientBuilder.standard()
-                .withRegion(REGION)
-                .build();
     }
 
     private String getRouteLine(String markup) {
@@ -192,13 +184,5 @@ public class ProcessCrawledMetroDataEvent {
 
     private String getNextContentAfterRoute(String markup) {
         return markup.split("</a>")[1].trim();
-    }
-
-    private String getPrefix() {
-        String year = String.valueOf(DateTime.now().getYear());
-        String month = String.valueOf(DateTime.now().getMonthOfYear());
-        String day = String.valueOf(DateTime.now().getDayOfMonth());
-
-        return String.format("docs/%s/%s/%s/", year, month, day);
     }
 }
