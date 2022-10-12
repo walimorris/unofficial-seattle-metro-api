@@ -61,7 +61,12 @@ public class ProcessCrawledMetroScheduleDataEvent {
     }
 
     private S3Object getTriggeredEventObject(S3Event event, AmazonS3 client) {
-        String eventKey = event.getRecords().get(0).getS3().getObject().getKey();
+        String eventKey = event.getRecords()
+                .get(0)
+                .getS3()
+                .getObject()
+                .getKey();
+
         GetObjectRequest getObjectRequest = new GetObjectRequest(PROCESSED_BUCKET, eventKey);
         return client.getObject(getObjectRequest);
     }
