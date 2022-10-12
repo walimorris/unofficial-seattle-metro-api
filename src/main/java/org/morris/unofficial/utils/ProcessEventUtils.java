@@ -55,7 +55,7 @@ public class ProcessEventUtils {
      * @return {@link String} a prefixed string date x days prior to the current date in form
      * YYYY/DD(D)/MM(M) 2022/8/10 or (2022/12/1)
      */
-    public static String getPastPrefix(int days) {
+    public static String getPrefix(int days) {
         String year = String.valueOf(DateTime.now()
                 .minusDays(days)
                 .getYear());

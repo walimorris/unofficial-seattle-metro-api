@@ -106,7 +106,7 @@ public class CrawlMetroEvent {
         int days = 7;
 
         while (object == null) {
-            String documentFromXDaysAgoUri = ProcessEventUtils.getPastPrefix(days) + ROUTES_DOC_FILE;
+            String documentFromXDaysAgoUri = ProcessEventUtils.getPrefix(days) + ROUTES_DOC_FILE;
             GetObjectRequest getObjectRequest = new GetObjectRequest(BUCKET, documentFromXDaysAgoUri);
             try {
                 object = s3Client.getObject(getObjectRequest);
