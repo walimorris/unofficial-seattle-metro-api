@@ -1,8 +1,11 @@
 package org.morris.unofficial.utils;
 
+import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import org.joda.time.DateTime;
+
+import java.io.*;
 
 public class ProcessEventUtils {
     final static private String REGION = System.getenv("REGION"); // region
@@ -69,5 +72,31 @@ public class ProcessEventUtils {
                 .getDayOfMonth());
 
         return String.format("docs/%s/%s/%s/", year, month, day);
+    }
+
+    /**
+     * Prints the contents of a {@link InputStream} to a file path in /tmp directory.
+     *
+     * @param inputStream {@link InputStream} content
+     * @param strPath {@link String} Path to save content as file
+     * @param logger {@link LambdaLogger}
+     */
+    public static void printToFile(InputStream inputStream, String strPath, LambdaLogger logger) {
+        try {
+            BufferedReader in = new BufferedReader(new InputStreamReader(inputStream));
+            String line;
+            StringBuffer content = new StringBuffer();
+            while ((line = in.readLine()) != null) {
+                content.append(line);
+            }
+            in.close();
+            logger.log(content.toString());
+
+            // write to file
+            PrintWriter printWriter = new PrintWriter(strPath);
+            printWriter.println(content);
+        } catch (IOException e) {
+            logger.log(String.format("Error writing route document dump to '%s': ", strPath + e.getMessage()));
+        }
     }
 }

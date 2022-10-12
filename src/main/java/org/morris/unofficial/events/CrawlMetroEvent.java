@@ -13,9 +13,6 @@ import com.amazonaws.services.s3.model.ObjectListing;
 import org.morris.unofficial.utils.ProcessEventUtils;
 
 import java.io.File;
-import java.io.PrintWriter;
-import java.io.InputStream;
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
@@ -115,7 +112,7 @@ public class CrawlMetroEvent {
             }
             days = days + 7;
         }
-        printToFile(object.getObjectContent(), TMP_RECENT_ROUTES_DOC_FILE, logger);
+        ProcessEventUtils.printToFile(object.getObjectContent(), TMP_RECENT_ROUTES_DOC_FILE, logger);
         s3Client.shutdown();
         return object;
     }
@@ -154,35 +151,10 @@ public class CrawlMetroEvent {
             HttpURLConnection connection = (HttpURLConnection) metroScheduleUrl.openConnection();
             connection.setRequestMethod(GET_REQUEST);
 
-            printToFile(connection.getInputStream(), TMP_ROUTES_DOC_FILE, logger);
+            ProcessEventUtils.printToFile(connection.getInputStream(), TMP_ROUTES_DOC_FILE, logger);
             connection.disconnect();
         } catch (IOException e) {
             logger.log(String.format("Error writing route document dump to '%s': ", TMP_ROUTES_DOC_FILE + e.getMessage()));
-        }
-    }
-
-    /**
-     * Prints the contents of a {@link InputStream} to a file path.
-     *
-     * @param inputStream {@link InputStream} content
-     * @param strPath {@link String} Path to save content as file
-     * @param logger {@link LambdaLogger}
-     */
-    private void printToFile(InputStream inputStream, String strPath, LambdaLogger logger) {
-        try {
-            BufferedReader in = new BufferedReader(new InputStreamReader(inputStream));
-            String line;
-            StringBuffer content = new StringBuffer();
-            while ((line = in.readLine()) != null) {
-                content.append(line);
-            }
-            in.close();
-
-            // write to file
-            PrintWriter printWriter = new PrintWriter(strPath);
-            printWriter.println(content);
-        } catch (IOException e) {
-            logger.log(String.format("Error writing route document dump to '%s': ", strPath + e.getMessage()));
         }
     }
 
