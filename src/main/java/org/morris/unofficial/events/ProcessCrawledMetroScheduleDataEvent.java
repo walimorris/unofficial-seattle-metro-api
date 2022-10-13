@@ -31,7 +31,17 @@ public class ProcessCrawledMetroScheduleDataEvent {
         List<MetroLine> metroLines = getMetroLineAsPojoFromJson(event, s3Client, logger);
         if (metroLines != null) {
             JSONArray metroLineJsonArray = parseMetroLinePojoListAsJsonArray(metroLines);
-            logger.log(metroLineJsonArray.toString());
+
+            // iterate each MetroLine object in jsonArray
+            for (int i = 0; i < metroLineJsonArray.length(); i++) {
+                JSONObject metroLineObject = metroLineJsonArray.getJSONObject(i);
+
+                // get the line schedule
+                String lineScheduleUrl = getLineScheduleUrl(metroLineObject);
+                logger.log("line url: " + lineScheduleUrl);
+
+                // query the url and obtain the schedule document dump - EXPENSIVE!
+            }
         }
 
         // shutdown s3 client
@@ -39,6 +49,18 @@ public class ProcessCrawledMetroScheduleDataEvent {
             s3Client.shutdown();
         }
         return "success";
+    }
+
+    /**
+     * Gets metro line url from MetroLine {@link JSONObject}
+     *
+     * @param metroLineObject {@link JSONObject} from MetroLine Properties
+     *
+     * @return {@link String} the Metro line's url
+     * @see MetroLine
+     */
+    private String getLineScheduleUrl(JSONObject metroLineObject) {
+        return metroLineObject.getString("line_schedule_url");
     }
 
     /**
