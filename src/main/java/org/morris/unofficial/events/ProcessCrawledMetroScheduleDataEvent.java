@@ -140,13 +140,17 @@ public class ProcessCrawledMetroScheduleDataEvent {
      * @return {@link String} url to the schedule's pdf document
      */
     private String extractPdfUrlFromScheduleDocumentDump(String scheduleDocumentDump, String line) {
-        String nextContent = scheduleDocumentDump.split("id=\"pdf-timetable-link\">")[1].trim();
-        nextContent = nextContent.split("target=\"_blank\">PDF timetable")[0].trim();
-        nextContent = nextContent.replace("'", "");
-        nextContent = nextContent.replace(" ", "");
-        nextContent = nextContent.split("\\(")[1];
-        nextContent = nextContent.split("\\)")[0];
-        nextContent = nextContent.replace("+routeName+", line);
+        String nextContent = scheduleDocumentDump
+                .split("id=\"pdf-timetable-link\">")[1]
+                .trim()
+                .split("target=\"_blank\">PDF timetable")[0]
+                .trim()
+                .replace("'", "")
+                .replace(" ", "")
+                .split("\\(")[1]
+                .split("\\)")[0]
+                .replace("+routeName+", line);
+
         return ProcessEventUtils.METRO_TOP_LEVEL_URL + nextContent;
     }
 
