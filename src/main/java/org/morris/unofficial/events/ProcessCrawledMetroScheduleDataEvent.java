@@ -9,19 +9,30 @@ import com.amazonaws.services.s3.model.S3Object;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.io.FileUtils;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.morris.unofficial.models.MetroLine;
 import org.morris.unofficial.utils.ProcessEventUtils;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
 public class ProcessCrawledMetroScheduleDataEvent {
     final private static String PROCESSED_BUCKET = System.getenv("PROCESSED_BUCKET_NAME");
     final private static String ROUTES_JSON_FILE = "/tmp/routes_doc.json";
+    final static private String LINE_SCHEDULE_TXT_FILE = "/tmp/line_schedule_doc.txt";
+    final static private String LINE_SCHEDULE_PDF_FILE = "/tmp/line_schedule_doc.pdf";
+    final static private String LINE_SCHEDULE_PDF_CONTENT_TXT_FILE = "/tmp/line_schedule_pdf_content.txt";
 
     public String handleRequest(S3Event event, Context context) {
         LambdaLogger logger = context.getLogger();
@@ -32,15 +43,28 @@ public class ProcessCrawledMetroScheduleDataEvent {
         if (metroLines != null) {
             JSONArray metroLineJsonArray = parseMetroLinePojoListAsJsonArray(metroLines);
 
-            // iterate each MetroLine object in jsonArray
-            for (int i = 0; i < metroLineJsonArray.length(); i++) {
+            // iterate each MetroLine object in jsonArray - limited to 1 object currently for testing purposes
+            // otherwise requests will be too expensive
+            for (int i = 0; i < 1 /*metroLineJsonArray.length()*/; i++) {
                 JSONObject metroLineObject = metroLineJsonArray.getJSONObject(i);
 
                 // get the line schedule
                 String lineScheduleUrl = getLineScheduleUrl(metroLineObject);
-                logger.log("line url: " + lineScheduleUrl);
+                String line = getLine(metroLineObject);
+                logger.log("line: " + line + "line url: " + lineScheduleUrl);
 
-                // query the url and obtain the schedule document dump - EXPENSIVE!
+                // query the scheduleUrl and obtain the pdf document with schedules
+                String lineSchedulePdfUrl = queryLineScheduleUrlForPdfScheduleUrl(lineScheduleUrl, line, logger);
+
+                // write pdf schedule to /tmp
+                ProcessEventUtils.printToPdfFile(LINE_SCHEDULE_PDF_FILE, lineSchedulePdfUrl);
+                String pdfScheduleContent = readPdfFileContent(logger);
+
+                // write schedule content to .txt file in /tmp
+                if (pdfScheduleContent != null) {
+                    InputStream pdfScheduleContentInputStream = new ByteArrayInputStream(pdfScheduleContent.getBytes());
+                    ProcessEventUtils.printToFile(pdfScheduleContentInputStream, LINE_SCHEDULE_PDF_CONTENT_TXT_FILE, logger);
+                }
             }
         }
 
@@ -49,6 +73,81 @@ public class ProcessCrawledMetroScheduleDataEvent {
             s3Client.shutdown();
         }
         return "success";
+    }
+
+    /**
+     * Reads the pdf content of a file located in {@code /tmp/line_schedule_doc.pdf} and returns the
+     * text representation of the contents in readable form.
+     *
+     * @param logger {@link LambdaLogger}
+     * @return {@link String} contents of pdf file in readable form
+     */
+    private String readPdfFileContent(LambdaLogger logger) {
+        String parsedText;
+        try {
+            File pdfDump = new File(LINE_SCHEDULE_PDF_FILE);
+            PDFTextStripper pdfTextStripper = new PDFTextStripper();
+            PDDocument doc = PDDocument.load(pdfDump);
+            parsedText = pdfTextStripper.getText(doc);
+        } catch (IOException e) {
+            logger.log(String.format("Error reading pdf file from '%s'" + e.getMessage(), LINE_SCHEDULE_PDF_FILE));
+            return null;
+        }
+        return parsedText;
+    }
+
+    /**
+     * Queries the line schedule url to obtain the markup document and obtains the line's pdf schedule url.
+     *
+     * @param lineScheduleUrl {@link String} url to the line's schedule
+     * @param line {@link String} the line# name of the MetroLine (ex: 190)
+     * @param logger {@link LambdaLogger}
+     *
+     * @return {@link String} the line's url to its schedule pdf file
+     */
+    private String queryLineScheduleUrlForPdfScheduleUrl(String lineScheduleUrl, String line, LambdaLogger logger) {
+        // dump the schedule url document to /tmp for processing
+        try {
+            URL url = new URL(lineScheduleUrl);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod(ProcessEventUtils.GET_REQUEST);
+
+            ProcessEventUtils.printToFile(connection.getInputStream(), LINE_SCHEDULE_TXT_FILE, logger);
+            connection.disconnect();
+        } catch (IOException e) {
+            logger.log(String.format("Error writing route document dump to '%s': ", LINE_SCHEDULE_TXT_FILE + e.getMessage()));
+        }
+
+        // read the dump into a string to begin transforming to pull the schedule pdf url
+        String scheduleUrlDocumentDump = null;
+        try {
+            scheduleUrlDocumentDump = new String(Files.readAllBytes(Paths.get(LINE_SCHEDULE_TXT_FILE)));
+        } catch (IOException e) {
+            logger.log(String.format("Error reading schedule document dump from: %s: " + e.getMessage(), LINE_SCHEDULE_TXT_FILE));
+        }
+        if (scheduleUrlDocumentDump != null) {
+            return extractPdfUrlFromScheduleDocumentDump(scheduleUrlDocumentDump, line);
+        }
+        return null;
+    }
+
+    /**
+     * Extracts the url to a MetroLine's schedule pdf file from the document dump of the line's schedule markup page.
+     *
+     * @param scheduleDocumentDump {@link String} of the schedule markup document page
+     * @param line {@link String} the line# name of the MetroLine (ex: 190)
+     *
+     * @return {@link String} url to the schedule's pdf document
+     */
+    private String extractPdfUrlFromScheduleDocumentDump(String scheduleDocumentDump, String line) {
+        String nextContent = scheduleDocumentDump.split("id=\"pdf-timetable-link\">")[1].trim();
+        nextContent = nextContent.split("target=\"_blank\">PDF timetable")[0].trim();
+        nextContent = nextContent.replace("'", "");
+        nextContent = nextContent.replace(" ", "");
+        nextContent = nextContent.split("\\(")[1];
+        nextContent = nextContent.split("\\)")[0];
+        nextContent = nextContent.replace("+routeName+", line);
+        return ProcessEventUtils.METRO_TOP_LEVEL_URL + nextContent;
     }
 
     /**
@@ -61,6 +160,18 @@ public class ProcessCrawledMetroScheduleDataEvent {
      */
     private String getLineScheduleUrl(JSONObject metroLineObject) {
         return metroLineObject.getString("line_schedule_url");
+    }
+
+    /**
+     * Gets metro line's line number from MetroLine {@link JSONObject}
+     *
+     * @param metroLineObject {@link JSONObject} from MetroLine Properties
+     *
+     * @return {@link String} the Metro line's line number
+     * @see MetroLine
+     */
+    private String getLine(JSONObject metroLineObject) {
+        return metroLineObject.getString("line");
     }
 
     /**

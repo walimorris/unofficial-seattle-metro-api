@@ -79,6 +79,12 @@
       <artifactId>commons-io</artifactId>
       <version>2.11.0</version>
     </dependency>
+    <!-- Helps work with parsing pdf files -->
+    <dependency>
+      <groupId>org.apache.pdfbox</groupId>
+      <artifactId>pdfbox</artifactId>
+      <version>2.0.27</version>
+    </dependency>
   </dependencies>
 
   <build>

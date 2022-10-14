@@ -5,11 +5,22 @@ import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import org.joda.time.DateTime;
 
-import java.io.*;
+import java.io.InputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.BufferedReader;
+import java.io.PrintWriter;
+import java.io.BufferedOutputStream;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
 public class ProcessEventUtils {
-    final static private String REGION = System.getenv("REGION"); // region
-    final static private String DEFAULT_REGION = "us-west-2";
+    final static public String REGION = System.getenv("REGION"); // region
+    final static public String DEFAULT_REGION = "us-west-2";
+    final static public String GET_REQUEST = "GET";
+    final static public String METRO_TOP_LEVEL_URL = "https://kingcounty.gov";
 
     /**
      * Get {@link AmazonS3} client
@@ -97,6 +108,35 @@ public class ProcessEventUtils {
             printWriter.println(content);
         } catch (IOException e) {
             logger.log(String.format("Error writing route document dump to '%s': ", strPath + e.getMessage()));
+        }
+    }
+
+    /**
+     * Prints the contents of a pdf file, given the files url, to a PDF file in /tmp directory.
+     *
+     * @param pdfPath {@link String} path to save pdf file in /tmp
+     * @param pdfUrl {@link String} the url of the given pdf file
+     *
+     * @see URL
+     * @see InputStream#read(byte[])
+     * @see OutputStream#write(int)
+     */
+    public static void printToPdfFile(String pdfPath, String pdfUrl) {
+        try {
+            OutputStream outputStream = new BufferedOutputStream(Files.newOutputStream(Paths.get(pdfPath)));
+            URL metroScheduleUrl = new URL(pdfUrl);
+            InputStream in = metroScheduleUrl.openStream();
+
+            int length;
+            byte[] buffer = new byte[1024];
+            while ((length = in.read(buffer)) > -1) {
+                outputStream.write(buffer, 0, length);
+            }
+            outputStream.close();
+            in.close();
+            System.out.printf("File written to: %s%n", pdfPath);
+        } catch (IOException e) {
+            System.out.printf("Error writing route document dump to '%s': " + e.getMessage() + "%n", pdfPath);
         }
     }
 }
