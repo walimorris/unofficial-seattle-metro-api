@@ -15,6 +15,13 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.morris.unofficial.models.MetroLine;
 import org.morris.unofficial.utils.ProcessEventUtils;
+import software.amazon.awssdk.services.comprehend.ComprehendClient;
+import software.amazon.awssdk.services.comprehend.model.KeyPhrase;
+import software.amazon.awssdk.services.comprehend.model.DominantLanguage;
+import software.amazon.awssdk.services.comprehend.model.DetectDominantLanguageResponse;
+import software.amazon.awssdk.services.comprehend.model.DetectDominantLanguageRequest;
+import software.amazon.awssdk.services.comprehend.model.DetectKeyPhrasesRequest;
+import software.amazon.awssdk.services.comprehend.model.DetectKeyPhrasesResponse;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -34,7 +41,7 @@ public class ProcessCrawledMetroScheduleDataEvent {
     final static private String LINE_SCHEDULE_PDF_FILE = "/tmp/line_schedule_doc.pdf";
     final static private String LINE_SCHEDULE_PDF_CONTENT_TXT_FILE = "/tmp/line_schedule_pdf_content.txt";
 
-    public String handleRequest(S3Event event, Context context) {
+    public String handleRequest(S3Event event, Context context) throws IOException {
         LambdaLogger logger = context.getLogger();
         AmazonS3 s3Client = ProcessEventUtils.getS3Client();
 
@@ -64,6 +71,12 @@ public class ProcessCrawledMetroScheduleDataEvent {
                 if (pdfScheduleContent != null) {
                     InputStream pdfScheduleContentInputStream = new ByteArrayInputStream(pdfScheduleContent.getBytes());
                     ProcessEventUtils.printToFile(pdfScheduleContentInputStream, LINE_SCHEDULE_PDF_CONTENT_TXT_FILE, logger);
+
+                    String pdfScheduleTextContent = ProcessEventUtils.readFileAsStringBuffer(LINE_SCHEDULE_PDF_CONTENT_TXT_FILE, logger);
+                    if (pdfScheduleTextContent != null) {
+                        List<KeyPhrase> scheduleKeyPhraseList = comprehendKeyPhraseList(pdfScheduleTextContent);
+                        logger.log(scheduleKeyPhraseList.toString());
+                    }
                 }
             }
         }
@@ -75,6 +88,57 @@ public class ProcessCrawledMetroScheduleDataEvent {
         return "success";
     }
 
+    private List<KeyPhrase> comprehendKeyPhraseList(String scheduleContent) {
+        List<KeyPhrase> keyPhraseFilterList1;
+        ComprehendClient comprehendClient = ComprehendClient.builder()
+                .region(ProcessEventUtils.getRegionV2())
+                .build();
+
+        // detect english key phrase in schedule content
+        DetectKeyPhrasesRequest detectKeyPhrasesRequest = DetectKeyPhrasesRequest.builder()
+                .text(scheduleContent)
+                .languageCode("en")
+                .build();
+
+        DetectKeyPhrasesResponse detectKeyPhrasesResponse = comprehendClient.detectKeyPhrases(detectKeyPhrasesRequest);
+        List<KeyPhrase> keyPhraseList = detectKeyPhrasesResponse.keyPhrases();
+        keyPhraseFilterList1 = new ArrayList<>();
+
+        for (KeyPhrase keyPhrase : keyPhraseList) {
+            DetectDominantLanguageRequest detectDominantLanguageRequest = DetectDominantLanguageRequest.builder()
+                    .text(keyPhrase.text())
+                    .build();
+            DetectDominantLanguageResponse detectDominantLanguageResponse = comprehendClient.detectDominantLanguage(detectDominantLanguageRequest);
+            List<DominantLanguage> dominantLanguageList = detectDominantLanguageResponse.languages();
+
+            // remove key phrases with spanish text language code
+            boolean containsSpanishLanguageCode = false;
+            for (DominantLanguage dominantLanguage : dominantLanguageList) {
+                if (dominantLanguage.languageCode().equals("es")) {
+                    containsSpanishLanguageCode = true;
+                    break;
+                }
+            }
+            // add english key phrases only to filter list 1
+            if (!containsSpanishLanguageCode) {
+                keyPhraseFilterList1.add(keyPhrase);
+            }
+        }
+        // return key phrases with schedule stops and times
+        return comprehendKeyPhraseListWithStopsAndTimes(keyPhraseFilterList1);
+    }
+
+    private List<KeyPhrase> comprehendKeyPhraseListWithStopsAndTimes(List<KeyPhrase> initialKeyPhraseList) {
+        List<KeyPhrase> keyPhraseListWithStopsAndTimes = new ArrayList<>();
+        String timeRegex = "^.*(?:\\d|[01]\\d|2[0-3]):[0-5]\\d.*$";
+        for (KeyPhrase keyPhrase : initialKeyPhraseList) {
+            if (keyPhrase.text().contains("#") || keyPhrase.text().matches(timeRegex)) {
+                keyPhraseListWithStopsAndTimes.add(keyPhrase);
+            }
+        }
+        return keyPhraseListWithStopsAndTimes;
+    }
+
     /**
      * Reads the pdf content of a file located in {@code /tmp/line_schedule_doc.pdf} and returns the
      * text representation of the contents in readable form.
@@ -82,17 +146,22 @@ public class ProcessCrawledMetroScheduleDataEvent {
      * @param logger {@link LambdaLogger}
      * @return {@link String} contents of pdf file in readable form
      */
-    private String readPdfFileContent(LambdaLogger logger) {
+    private String readPdfFileContent(LambdaLogger logger) throws IOException {
         String parsedText;
+        PDDocument doc = null;
         try {
             File pdfDump = new File(LINE_SCHEDULE_PDF_FILE);
             PDFTextStripper pdfTextStripper = new PDFTextStripper();
-            PDDocument doc = PDDocument.load(pdfDump);
+            doc = PDDocument.load(pdfDump);
             parsedText = pdfTextStripper.getText(doc);
         } catch (IOException e) {
             logger.log(String.format("Error reading pdf file from '%s'" + e.getMessage(), LINE_SCHEDULE_PDF_FILE));
+            if (doc != null) {
+                doc.close();
+            }
             return null;
         }
+        doc.close();
         return parsedText;
     }
 

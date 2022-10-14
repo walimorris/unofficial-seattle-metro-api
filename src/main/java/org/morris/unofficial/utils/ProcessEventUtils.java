@@ -4,14 +4,9 @@ import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import org.joda.time.DateTime;
+import software.amazon.awssdk.regions.Region;
 
-import java.io.InputStream;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.io.BufferedReader;
-import java.io.PrintWriter;
-import java.io.BufferedOutputStream;
+import java.io.*;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -39,6 +34,10 @@ public class ProcessEventUtils {
      */
     public static String getRegion() {
         return REGION == null ? DEFAULT_REGION : REGION;
+    }
+
+    public static Region getRegionV2() {
+        return REGION == null ? Region.of(DEFAULT_REGION) : Region.of(REGION);
     }
 
     /**
@@ -138,5 +137,30 @@ public class ProcessEventUtils {
         } catch (IOException e) {
             System.out.printf("Error writing route document dump to '%s': " + e.getMessage() + "%n", pdfPath);
         }
+    }
+
+    public static String readFileAsStringBuffer(String filePath, LambdaLogger logger) throws IOException {
+        StringBuffer stringBuffer = null;
+        BufferedReader bufferedReader = null;
+        try {
+            File dump = new File(filePath);
+            bufferedReader = new BufferedReader(new InputStreamReader(Files.newInputStream(dump.toPath())));
+            stringBuffer = new StringBuffer();
+            String line;
+            while ((line = bufferedReader.readLine()) != null) {
+                stringBuffer.append(line);
+            }
+            logger.log(stringBuffer.toString());
+            bufferedReader.close();
+        } catch (IOException e) {
+            logger.log(String.format("Error reading file '%s' as string: " + e.getMessage(), filePath));
+            if (bufferedReader != null) {
+                bufferedReader.close();
+            }
+        }
+        if (stringBuffer != null) {
+            return stringBuffer.toString();
+        }
+        return null;
     }
 }
