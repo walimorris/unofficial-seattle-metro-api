@@ -16,6 +16,7 @@ import org.json.JSONObject;
 import org.morris.unofficial.models.MetroLine;
 import org.morris.unofficial.utils.ProcessEventUtils;
 import software.amazon.awssdk.services.comprehend.ComprehendClient;
+import software.amazon.awssdk.services.comprehend.model.ComprehendException;
 import software.amazon.awssdk.services.comprehend.model.KeyPhrase;
 import software.amazon.awssdk.services.comprehend.model.DominantLanguage;
 import software.amazon.awssdk.services.comprehend.model.DetectDominantLanguageResponse;
@@ -72,10 +73,13 @@ public class ProcessCrawledMetroScheduleDataEvent {
                     InputStream pdfScheduleContentInputStream = new ByteArrayInputStream(pdfScheduleContent.getBytes());
                     ProcessEventUtils.printToFile(pdfScheduleContentInputStream, LINE_SCHEDULE_PDF_CONTENT_TXT_FILE, logger);
 
-                    String pdfScheduleTextContent = ProcessEventUtils.readFileAsStringBuffer(LINE_SCHEDULE_PDF_CONTENT_TXT_FILE, logger);
-                    if (pdfScheduleTextContent != null) {
-                        List<KeyPhrase> scheduleKeyPhraseList = comprehendKeyPhraseList(pdfScheduleTextContent);
-                        logger.log(scheduleKeyPhraseList.toString());
+                    List<KeyPhrase> scheduleKeyPhraseList = comprehendKeyPhraseList(pdfScheduleContent, logger);
+                    if (scheduleKeyPhraseList != null) {
+                        for (KeyPhrase keyPhrase : scheduleKeyPhraseList) {
+                            logger.log("Printing key phrase--------------------------------------------------");
+                            logger.log(keyPhrase.text());
+                            logger.log("End key phrase-------------------------------------------------------");
+                        }
                     }
                 }
             }
@@ -88,47 +92,92 @@ public class ProcessCrawledMetroScheduleDataEvent {
         return "success";
     }
 
-    private List<KeyPhrase> comprehendKeyPhraseList(String scheduleContent) {
+    /**
+     * Builds a list of KeyPhrases from the text content of a MetroLine schedule that contains the stop#(s)
+     * and stop times of each stop in the MetroLine.
+     *
+     * @param scheduleContent {@link String} of the MetroLines schedule content read from a pdf file
+     * @param logger {@link LambdaLogger}
+     * @return {@link List} of KeyPhrases from the text
+     *
+     * @see ProcessCrawledMetroScheduleDataEvent#readPdfFileContent(LambdaLogger)
+     * @see MetroLine
+     * @see KeyPhrase
+     * @see ComprehendClient
+     * @see DetectDominantLanguageRequest
+     */
+    private List<KeyPhrase> comprehendKeyPhraseList(String scheduleContent, LambdaLogger logger) {
         List<KeyPhrase> keyPhraseFilterList1;
-        ComprehendClient comprehendClient = ComprehendClient.builder()
-                .region(ProcessEventUtils.getRegionV2())
-                .build();
+        ComprehendClient comprehendClient = null;
 
-        // detect english key phrase in schedule content
-        DetectKeyPhrasesRequest detectKeyPhrasesRequest = DetectKeyPhrasesRequest.builder()
-                .text(scheduleContent)
-                .languageCode("en")
-                .build();
-
-        DetectKeyPhrasesResponse detectKeyPhrasesResponse = comprehendClient.detectKeyPhrases(detectKeyPhrasesRequest);
-        List<KeyPhrase> keyPhraseList = detectKeyPhrasesResponse.keyPhrases();
-        keyPhraseFilterList1 = new ArrayList<>();
-
-        for (KeyPhrase keyPhrase : keyPhraseList) {
-            DetectDominantLanguageRequest detectDominantLanguageRequest = DetectDominantLanguageRequest.builder()
-                    .text(keyPhrase.text())
+        try {
+            comprehendClient = ComprehendClient.builder()
+                    .region(ProcessEventUtils.getRegionV2())
                     .build();
-            DetectDominantLanguageResponse detectDominantLanguageResponse = comprehendClient.detectDominantLanguage(detectDominantLanguageRequest);
-            List<DominantLanguage> dominantLanguageList = detectDominantLanguageResponse.languages();
+        } catch (ComprehendException e) {
+            logger.log("Error building comprehend client: " + e.getMessage());
+        }
+        if (comprehendClient != null) {
 
-            // remove key phrases with spanish text language code
-            boolean containsSpanishLanguageCode = false;
-            for (DominantLanguage dominantLanguage : dominantLanguageList) {
-                if (dominantLanguage.languageCode().equals("es")) {
-                    containsSpanishLanguageCode = true;
-                    break;
+            // build detect KeyPhrases request
+            DetectKeyPhrasesRequest detectKeyPhrasesRequest = DetectKeyPhrasesRequest.builder()
+                    .text(scheduleContent)
+                    .languageCode("en")
+                    .build();
+
+            // detect english key phrase in schedule content
+            DetectKeyPhrasesResponse detectKeyPhrasesResponse = comprehendClient.detectKeyPhrases(detectKeyPhrasesRequest);
+            List<KeyPhrase> keyPhraseList = detectKeyPhrasesResponse.keyPhrases();
+            keyPhraseFilterList1 = new ArrayList<>();
+
+            // analyze each KeyPhrase for dominant language
+            for (KeyPhrase keyPhrase : keyPhraseList) {
+                DetectDominantLanguageRequest detectDominantLanguageRequest = DetectDominantLanguageRequest.builder()
+                        .text(keyPhrase.text())
+                        .build();
+                DetectDominantLanguageResponse detectDominantLanguageResponse = comprehendClient.detectDominantLanguage(detectDominantLanguageRequest);
+                List<DominantLanguage> dominantLanguageList = detectDominantLanguageResponse.languages();
+
+                // remove key phrases with spanish text language code as dominant language
+                boolean containsSpanishLanguageCode = false;
+                for (DominantLanguage dominantLanguage : dominantLanguageList) {
+                    if (dominantLanguage.languageCode().equals("es")) {
+                        containsSpanishLanguageCode = true;
+                        break;
+                    }
+                }
+                // add english key phrases only to filter list 1
+                if (!containsSpanishLanguageCode) {
+                    logger.log("adding keyphrase: " + keyPhrase.text());
+                    keyPhraseFilterList1.add(keyPhrase);
+                } else {
+                    logger.log("not adding key phrase: " + keyPhrase.text());
                 }
             }
-            // add english key phrases only to filter list 1
-            if (!containsSpanishLanguageCode) {
-                keyPhraseFilterList1.add(keyPhrase);
-            }
+            comprehendClient.close();
+            // return key phrases with schedule stops and times
+            return comprehendKeyPhraseListWithStopsAndTimes(keyPhraseFilterList1, logger);
         }
-        // return key phrases with schedule stops and times
-        return comprehendKeyPhraseListWithStopsAndTimes(keyPhraseFilterList1);
+        return null;
     }
 
-    private List<KeyPhrase> comprehendKeyPhraseListWithStopsAndTimes(List<KeyPhrase> initialKeyPhraseList) {
+    /**
+     * Builds a {@link List} of KeyPhrases of the MetroLine's stops and times using AWS Comprehend
+     * service.
+     * <p></p>
+     * {@code The given regex checks for time format in form 5:25 or 12:06 including leading zeros.}
+     * {@code The given regex allows for any number of trailing characters before or after the time format.}
+     * {@code Ex: x = any character - x5:25xxx or 5:25x or xxx5:25}
+     * <p></p>
+     * {@code Regex v1.0: ^.*(?:\\d|[01]\\d|2[0-3]):[0-5]\\d.*$}
+     *
+     * @param initialKeyPhraseList {@link List} of {@link KeyPhrase}s
+     * @return {@link List} of KeyPhrases
+     *
+     * @see KeyPhrase
+     * @see ComprehendClient
+     */
+    private List<KeyPhrase> comprehendKeyPhraseListWithStopsAndTimes(List<KeyPhrase> initialKeyPhraseList, LambdaLogger logger) {
         List<KeyPhrase> keyPhraseListWithStopsAndTimes = new ArrayList<>();
         String timeRegex = "^.*(?:\\d|[01]\\d|2[0-3]):[0-5]\\d.*$";
         for (KeyPhrase keyPhrase : initialKeyPhraseList) {

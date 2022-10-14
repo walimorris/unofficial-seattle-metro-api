@@ -6,7 +6,14 @@ import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import org.joda.time.DateTime;
 import software.amazon.awssdk.regions.Region;
 
-import java.io.*;
+import java.io.IOException;
+import java.io.File;
+import java.io.PrintWriter;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.BufferedOutputStream;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -100,7 +107,6 @@ public class ProcessEventUtils {
                 content.append(line);
             }
             in.close();
-            logger.log(content.toString());
 
             // write to file
             PrintWriter printWriter = new PrintWriter(strPath);
@@ -139,7 +145,7 @@ public class ProcessEventUtils {
         }
     }
 
-    public static String readFileAsStringBuffer(String filePath, LambdaLogger logger) throws IOException {
+    public static StringBuffer readFileAsStringBuffer(String filePath, LambdaLogger logger) throws IOException {
         StringBuffer stringBuffer = null;
         BufferedReader bufferedReader = null;
         try {
@@ -159,7 +165,7 @@ public class ProcessEventUtils {
             }
         }
         if (stringBuffer != null) {
-            return stringBuffer.toString();
+            return stringBuffer;
         }
         return null;
     }
