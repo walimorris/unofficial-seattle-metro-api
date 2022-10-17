@@ -75,11 +75,8 @@ public class ProcessCrawledMetroScheduleDataEvent {
 
                     List<KeyPhrase> scheduleKeyPhraseList = comprehendKeyPhraseList(pdfScheduleContent, logger);
                     if (scheduleKeyPhraseList != null) {
-                        for (KeyPhrase keyPhrase : scheduleKeyPhraseList) {
-                            logger.log("Printing key phrase--------------------------------------------------");
-                            logger.log(keyPhrase.text());
-                            logger.log("End key phrase-------------------------------------------------------");
-                        }
+                        // clean key phrases of any extra characters orr improper format
+                        List<KeyPhrase> formattedKeyPhraseList = formatKeyPhraseList(scheduleKeyPhraseList, logger);
                     }
                 }
             }
@@ -90,6 +87,68 @@ public class ProcessCrawledMetroScheduleDataEvent {
             s3Client.shutdown();
         }
         return "success";
+    }
+
+    /**
+     * Formats the generated key phrases from Comprehend NLP client by removing extra symbols, characters,
+     * and spaces. This routine helps prepare and transform MetroLine schedule data.
+     *
+     * @param unformattedKeyPhraseList {@link List} of unformatted {@link KeyPhrase}
+     * @param logger {@link LambdaLogger}
+     *
+     * @return {@link List} of formatted {@link KeyPhrase}
+     * @see MetroLine
+     * @see ComprehendClient
+     */
+    private List<KeyPhrase> formatKeyPhraseList(List<KeyPhrase> unformattedKeyPhraseList, LambdaLogger logger) {
+        List<KeyPhrase> formattedKeyPhraseList = new ArrayList<>();
+        try {
+            for (KeyPhrase keyPhrase : unformattedKeyPhraseList) {
+                if (keyPhrase.text().contains("#")) {
+                    StringBuilder phrase = new StringBuilder();
+
+                    // remove digit symbol, space and any characters after space
+                    phrase.append(keyPhrase.text().replace("#", "").trim());
+                    if (phrase.toString().contains(" ")) {
+                        phrase = new StringBuilder(phrase.toString().split(" ")[0].trim());
+                    }
+
+                    keyPhrase = KeyPhrase.builder()
+                            .text(phrase.toString())
+                            .build();
+                    formattedKeyPhraseList.add(keyPhrase);
+
+                } else {
+                    if (keyPhrase.text().contains(":")) {
+                        // example 12:45 | 5:25
+                        if (keyPhrase.text().matches("^(?:\\d|[01]\\d|2[0-3]):[0-5]\\d$")) {
+                            formattedKeyPhraseList.add(keyPhrase);
+                        } else {
+                            StringBuilder phrase = new StringBuilder();
+                            // remove any characters after time formatted phrase
+                            keyPhrase = KeyPhrase.builder()
+                                    .text(keyPhrase.text().split(" ")[0])
+                                    .build();
+
+                            String[] phraseParts = keyPhrase.text().split(":");
+                            phrase.append(phraseParts[0])
+                                    .append(":"); // ex: '5:' or '11:'
+
+                            // only append 2 characters
+                            phrase.append(phraseParts[1], 0, 2);
+                            keyPhrase = KeyPhrase.builder()
+                                    .text(phrase.toString())
+                                    .build();
+                            formattedKeyPhraseList.add(keyPhrase);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.log("Error formatting list of keyPhrases: " + e.getMessage());
+            return null;
+        }
+        return formattedKeyPhraseList;
     }
 
     /**
@@ -148,10 +207,7 @@ public class ProcessCrawledMetroScheduleDataEvent {
                 }
                 // add english key phrases only to filter list 1
                 if (!containsSpanishLanguageCode) {
-                    logger.log("adding keyphrase: " + keyPhrase.text());
                     keyPhraseFilterList1.add(keyPhrase);
-                } else {
-                    logger.log("not adding key phrase: " + keyPhrase.text());
                 }
             }
             comprehendClient.close();
@@ -179,10 +235,13 @@ public class ProcessCrawledMetroScheduleDataEvent {
      */
     private List<KeyPhrase> comprehendKeyPhraseListWithStopsAndTimes(List<KeyPhrase> initialKeyPhraseList, LambdaLogger logger) {
         List<KeyPhrase> keyPhraseListWithStopsAndTimes = new ArrayList<>();
-        String timeRegex = "^.*(?:\\d|[01]\\d|2[0-3]):[0-5]\\d.*$";
+//        String timeRegex = "^.*(?:\\d|[01]\\d|2[0-3]):[0-5]\\d.*?$";
         for (KeyPhrase keyPhrase : initialKeyPhraseList) {
-            if (keyPhrase.text().contains("#") || keyPhrase.text().matches(timeRegex)) {
+            if (keyPhrase.text().contains("#") || keyPhrase.text().contains(":")) {
+                logger.log("keyPhrase: " + keyPhrase);
                 keyPhraseListWithStopsAndTimes.add(keyPhrase);
+            } else {
+                logger.log("not adding key phrase: " + keyPhrase.text());
             }
         }
         return keyPhraseListWithStopsAndTimes;
