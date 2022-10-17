@@ -13,6 +13,7 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.morris.unofficial.models.KeyPhraseType;
 import org.morris.unofficial.models.MetroLine;
 import org.morris.unofficial.utils.ProcessEventUtils;
 import software.amazon.awssdk.services.comprehend.ComprehendClient;
@@ -77,6 +78,12 @@ public class ProcessCrawledMetroScheduleDataEvent {
                     if (scheduleKeyPhraseList != null) {
                         // clean key phrases of any extra characters orr improper format
                         List<KeyPhrase> formattedKeyPhraseList = formatKeyPhraseList(scheduleKeyPhraseList, logger);
+                        if (formattedKeyPhraseList != null) {
+                            // receive list of stops and stop-times to begin building a structure that holds each stop
+                            // and its respective stop times
+                            List<KeyPhrase> formattedStopKeyPhrases = getFormattedStopKeyPhrases(formattedKeyPhraseList, KeyPhraseType.STOPS);
+                            List<KeyPhrase> formattedStopTimeKeyPhrases = getFormattedStopKeyPhrases(formattedKeyPhraseList, KeyPhraseType.STOP_TIMES);
+                        }
                     }
                 }
             }
@@ -87,6 +94,35 @@ public class ProcessCrawledMetroScheduleDataEvent {
             s3Client.shutdown();
         }
         return "success";
+    }
+
+    /**
+     * Gets a {@link List} of specific key phrases based on the keyPhraseType.
+     * stops: gets a list of key phrases based on stop lines and their values.
+     * stop-times: gets a list of key phrases based on stop times and their values.
+     *
+     * @param formattedKeyPhrasesList {@link List} of all formatted KeyPhrases
+     * @param type {@link KeyPhraseType}
+     * @return {@link List} of KeyPhrases
+     *
+     * @see KeyPhrase
+     * @see MetroLine
+     */
+    private List<KeyPhrase> getFormattedStopKeyPhrases(List<KeyPhrase> formattedKeyPhrasesList, KeyPhraseType type) {
+        List<KeyPhrase> phrases = new ArrayList<>();
+        String mark = type.getType().equals("stop-times") ? ":" : null;
+        for (KeyPhrase keyPhrase : formattedKeyPhrasesList) {
+            if (mark != null) {
+                if (keyPhrase.text().contains(mark)) {
+                    phrases.add(keyPhrase);
+                }
+            } else {
+                if (!keyPhrase.text().matches("^(?:\\d|[01]\\d|2[0-3]):[0-5]\\d$")) {
+                    phrases.add(keyPhrase);
+                }
+            }
+        }
+        return phrases;
     }
 
     /**
