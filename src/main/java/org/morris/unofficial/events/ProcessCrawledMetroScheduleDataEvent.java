@@ -66,7 +66,7 @@ public class ProcessCrawledMetroScheduleDataEvent {
                 String lineSchedulePdfUrl = queryLineScheduleUrlForPdfScheduleUrl(lineScheduleUrl, line, logger);
 
                 // write pdf schedule to /tmp
-                ProcessEventUtils.printToPdfFile(LINE_SCHEDULE_PDF_FILE, lineSchedulePdfUrl);
+                ProcessEventUtils.printToPdfFile(LINE_SCHEDULE_PDF_FILE, lineSchedulePdfUrl, logger);
                 String pdfScheduleContent = readPdfFileContent(logger);
 
                 // write schedule content to .txt file in /tmp

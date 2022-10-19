@@ -3,6 +3,7 @@ package org.morris.unofficial.utils;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import org.apache.commons.io.FileUtils;
 import org.joda.time.DateTime;
 import software.amazon.awssdk.regions.Region;
 
@@ -99,6 +100,7 @@ public class ProcessEventUtils {
      * @param logger {@link LambdaLogger}
      */
     public static void printToFile(InputStream inputStream, String strPath, LambdaLogger logger) {
+        purgeTmpDirectoryFile(strPath, logger);
         try {
             BufferedReader in = new BufferedReader(new InputStreamReader(inputStream));
             String line;
@@ -126,7 +128,9 @@ public class ProcessEventUtils {
      * @see InputStream#read(byte[])
      * @see OutputStream#write(int)
      */
-    public static void printToPdfFile(String pdfPath, String pdfUrl) {
+    public static void printToPdfFile(String pdfPath, String pdfUrl, LambdaLogger logger) {
+        // delete file if it exists
+        purgeTmpDirectoryFile(pdfPath, logger);
         try {
             OutputStream outputStream = new BufferedOutputStream(Files.newOutputStream(Paths.get(pdfPath)));
             URL metroScheduleUrl = new URL(pdfUrl);
@@ -164,9 +168,14 @@ public class ProcessEventUtils {
                 bufferedReader.close();
             }
         }
-        if (stringBuffer != null) {
-            return stringBuffer;
+        return stringBuffer;
+    }
+
+    public static void purgeTmpDirectoryFile(String path, LambdaLogger logger) {
+        try {
+            FileUtils.forceDelete(new File(path));
+        } catch (IOException e) {
+            logger.log("Error cleaning /tmp directory: " + e.getMessage());
         }
-        return null;
     }
 }
