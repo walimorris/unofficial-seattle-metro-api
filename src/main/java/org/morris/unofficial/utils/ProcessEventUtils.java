@@ -171,6 +171,12 @@ public class ProcessEventUtils {
         return stringBuffer;
     }
 
+    /**
+     * Removes a file within the /tmp directory given the path.
+     *
+     * @param path path to file in /tmp
+     * @param logger {@link LambdaLogger}
+     */
     public static void purgeTmpDirectoryFile(String path, LambdaLogger logger) {
         try {
             FileUtils.forceDelete(new File(path));
