@@ -92,8 +92,12 @@
       <dependency>
           <groupId>com.amazonaws</groupId>
           <artifactId>aws-java-sdk-textract</artifactId>
-          <version>1.11.1000</version>
+          <version>1.12.322</version>
       </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>textract</artifactId>
+    </dependency>
   </dependencies>
 
   <build>

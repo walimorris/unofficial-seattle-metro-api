@@ -3,11 +3,14 @@ package org.morris.unofficial.utils;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.model.S3Object;
+import com.amazonaws.services.s3.model.S3ObjectInputStream;
 import com.amazonaws.services.textract.AmazonTextract;
 import org.apache.commons.io.FileUtils;
 import org.joda.time.DateTime;
 import software.amazon.awssdk.regions.Region;
 import com.amazonaws.services.textract.AmazonTextractClient;
+import software.amazon.awssdk.services.textract.TextractClient;
 
 import java.io.IOException;
 import java.io.File;
@@ -15,6 +18,8 @@ import java.io.PrintWriter;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.InputStream;
+import java.io.FileNotFoundException;
+import java.io.FileInputStream;
 import java.io.OutputStream;
 import java.io.BufferedOutputStream;
 import java.net.URL;
@@ -49,6 +54,16 @@ public class ProcessEventUtils {
     }
 
     /**
+     * Get {@link TextractClient}
+     * @return {@link TextractClient}
+     */
+    public static TextractClient getTextractClient() {
+        return TextractClient.builder()
+                .region(getRegionV2())
+                .build();
+    }
+
+    /**
      * Shutdown all clients in given {@link List}
      * @param clients {@link Object}
      */
@@ -56,9 +71,11 @@ public class ProcessEventUtils {
         for (Object client : clients) {
             if (client instanceof AmazonS3) {
                 ((AmazonS3) client).shutdown();
+            } else if (client instanceof AmazonTextract) {
+                ((AmazonTextract) client).shutdown();
             } else {
-                if (client instanceof AmazonTextract) {
-                    ((AmazonTextract) client).shutdown();
+                if (client instanceof TextractClient) {
+                    ((TextractClient) client).close();
                 }
             }
         }
@@ -201,16 +218,40 @@ public class ProcessEventUtils {
     }
 
     /**
-     * Removes a file within the /tmp directory given the path.
+     * Removes a file within the /tmp directory, if its exists, given the path.
      *
      * @param path path to file in /tmp
      * @param logger {@link LambdaLogger}
      */
     public static void purgeTmpDirectoryFile(String path, LambdaLogger logger) {
         try {
-            FileUtils.forceDelete(new File(path));
+            if (FileUtils.toFile(new URL(path)).exists()) {
+                FileUtils.forceDelete(new File(path));
+            }
         } catch (IOException e) {
             logger.log("Error cleaning /tmp directory: " + e.getMessage());
         }
+    }
+
+    /**
+     * Gets a file in /tmp directory as an {@link S3Object}.
+     *
+     * @param filePath {@link String} path to file in /tmp
+     * @param logger {@link LambdaLogger}
+     * @return {@link S3Object}
+     */
+    public static S3Object getAsS3Object(String filePath, LambdaLogger logger) {
+        try (S3Object object = new S3Object()) {
+            try {
+                S3ObjectInputStream s3ObjectInputStream = new S3ObjectInputStream(new FileInputStream(filePath), null);
+                object.setObjectContent(s3ObjectInputStream);
+                return object;
+            } catch (FileNotFoundException e) {
+                logger.log(String.format("Error converting file '%s' to S3Object: %s", filePath, e.getMessage()));
+            }
+        } catch (IOException e) {
+            logger.log(String.format("Error creating S3Object from file '%s'" + e.getMessage(), filePath));
+        }
+        return null;
     }
 }
