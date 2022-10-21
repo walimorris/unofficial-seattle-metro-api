@@ -78,5 +78,6 @@
     <orderEntry type="library" name="Maven: org.apache.pdfbox:pdfbox:2.0.27" level="project" />
     <orderEntry type="library" name="Maven: org.apache.pdfbox:fontbox:2.0.27" level="project" />
     <orderEntry type="library" name="Maven: commons-logging:commons-logging:1.2" level="project" />
+    <orderEntry type="library" name="Maven: com.amazonaws:aws-java-sdk-textract:1.11.1000" level="project" />
   </component>
 </module>

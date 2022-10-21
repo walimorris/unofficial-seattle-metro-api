@@ -3,9 +3,11 @@ package org.morris.unofficial.utils;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.textract.AmazonTextract;
 import org.apache.commons.io.FileUtils;
 import org.joda.time.DateTime;
 import software.amazon.awssdk.regions.Region;
+import com.amazonaws.services.textract.AmazonTextractClient;
 
 import java.io.IOException;
 import java.io.File;
@@ -18,6 +20,7 @@ import java.io.BufferedOutputStream;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.List;
 
 public class ProcessEventUtils {
     final static public String REGION = System.getenv("REGION"); // region
@@ -33,6 +36,32 @@ public class ProcessEventUtils {
         return AmazonS3ClientBuilder.standard()
                 .withRegion(getRegion())
                 .build();
+    }
+
+    /**
+     * Get {@link AmazonTextract} client
+     * @return {@link AmazonTextract}
+     */
+    public static AmazonTextract getAmazonTextractClient() {
+        return AmazonTextractClient.builder()
+                .withRegion(getRegion())
+                .build();
+    }
+
+    /**
+     * Shutdown all clients in given {@link List}
+     * @param clients {@link Object}
+     */
+    public static void shutdownClients(List<Object> clients) {
+        for (Object client : clients) {
+            if (client instanceof AmazonS3) {
+                ((AmazonS3) client).shutdown();
+            } else {
+                if (client instanceof AmazonTextract) {
+                    ((AmazonTextract) client).shutdown();
+                }
+            }
+        }
     }
 
     /**

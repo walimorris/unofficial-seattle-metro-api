@@ -6,6 +6,11 @@ import com.amazonaws.services.lambda.runtime.events.S3Event;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
+import com.amazonaws.services.textract.AmazonTextract;
+import com.amazonaws.services.textract.model.Block;
+import com.amazonaws.services.textract.model.DetectDocumentTextRequest;
+import com.amazonaws.services.textract.model.Document;
+import com.amazonaws.services.textract.model.DetectDocumentTextResult;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.io.FileUtils;
@@ -16,6 +21,7 @@ import org.json.JSONObject;
 import org.morris.unofficial.models.KeyPhraseType;
 import org.morris.unofficial.models.MetroLine;
 import org.morris.unofficial.utils.ProcessEventUtils;
+import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.services.comprehend.ComprehendClient;
 import software.amazon.awssdk.services.comprehend.model.ComprehendException;
 import software.amazon.awssdk.services.comprehend.model.KeyPhrase;
@@ -29,11 +35,14 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public class ProcessCrawledMetroScheduleDataEvent {
@@ -46,6 +55,7 @@ public class ProcessCrawledMetroScheduleDataEvent {
     public String handleRequest(S3Event event, Context context) throws IOException {
         LambdaLogger logger = context.getLogger();
         AmazonS3 s3Client = ProcessEventUtils.getS3Client();
+        AmazonTextract textractClient = ProcessEventUtils.getAmazonTextractClient();
 
         // lets get the processed data in a file
         List<MetroLine> metroLines = getMetroLineAsPojoFromJson(event, s3Client, logger);
@@ -89,11 +99,35 @@ public class ProcessCrawledMetroScheduleDataEvent {
             }
         }
 
-        // shutdown s3 client
-        if (s3Client != null) {
-            s3Client.shutdown();
-        }
+        // shutdown all clients
+        ProcessEventUtils.shutdownClients(new ArrayList<>(Arrays.asList(s3Client, textractClient)));
         return "success";
+    }
+
+    /**
+     * Get List of {@link Block} from the MetroLine Schedule PDF file.
+     *
+     * @param logger {@link LambdaLogger}
+     * @return {@link Block}
+     *
+     * @see MetroLine
+     */
+    private List<Block> detectPdfTextBlocks(AmazonTextract textractClient, LambdaLogger logger) {
+        List<Block> pdfBlocks = new ArrayList<>();
+        try {
+            InputStream source = new FileInputStream(Paths.get(LINE_SCHEDULE_PDF_FILE).toFile());
+            SdkBytes sourceBytes = SdkBytes.fromInputStream(source);
+
+            Document document = new Document().withBytes(sourceBytes.asByteBuffer());
+            DetectDocumentTextRequest detectDocumentTextRequest = new DetectDocumentTextRequest()
+                    .withDocument(document);
+
+            DetectDocumentTextResult detectDocumentTextResult = textractClient.detectDocumentText(detectDocumentTextRequest);
+            pdfBlocks = detectDocumentTextResult.getBlocks();
+        } catch (FileNotFoundException e) {
+            logger.log(String.format("File not found: '%s' and unable to process PDF Text blocks", LINE_SCHEDULE_PDF_FILE) + e.getMessage());
+        }
+        return pdfBlocks;
     }
 
     /**

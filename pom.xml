@@ -89,6 +89,11 @@
       <artifactId>pdfbox</artifactId>
       <version>2.0.27</version>
     </dependency>
+      <dependency>
+          <groupId>com.amazonaws</groupId>
+          <artifactId>aws-java-sdk-textract</artifactId>
+          <version>1.11.1000</version>
+      </dependency>
   </dependencies>
 
   <build>
