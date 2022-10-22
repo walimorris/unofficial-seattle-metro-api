@@ -3,9 +3,14 @@ package org.morris.unofficial.utils;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectInputStream;
+import com.amazonaws.services.sns.AmazonSNS;
+import com.amazonaws.services.sns.AmazonSNSClientBuilder;
+import com.amazonaws.services.sns.model.ListTopicsResult;
+import com.amazonaws.services.sns.model.Topic;
 import com.amazonaws.services.textract.AmazonTextract;
 import org.apache.commons.io.FileUtils;
 import org.joda.time.DateTime;
@@ -64,6 +69,12 @@ public class ProcessEventUtils {
                 .build();
     }
 
+    public static AmazonSNS getAmazonSNSClient() {
+        return AmazonSNSClientBuilder.standard()
+                .withRegion(getRegion())
+                .build();
+    }
+
     /**
      * Shutdown all clients in given {@link List}
      * @param clients {@link Object}
@@ -80,6 +91,20 @@ public class ProcessEventUtils {
                 }
             }
         }
+    }
+
+    public static String getTextractTopicArn() {
+        AmazonSNS snsClient = getAmazonSNSClient();
+        ListTopicsResult topicsResults = snsClient.listTopics();
+        String textractTopicArn = null;
+        List<Topic> topics = topicsResults.getTopics();
+        for (Topic topic : topics) {
+            String lowercaseTopic = topic.toString().toLowerCase();
+            if (lowercaseTopic.contains("textract") && lowercaseTopic.contains("detection")) {
+                textractTopicArn = topic.getTopicArn();
+            }
+        }
+        return textractTopicArn;
     }
 
     /**
@@ -256,6 +281,20 @@ public class ProcessEventUtils {
         return null;
     }
 
+    public static S3Object getS3Object(String key, String bucket) {
+        GetObjectRequest getObjectRequest = new GetObjectRequest(bucket, key);
+        AmazonS3 s3Client = getS3Client();
+        S3Object object = s3Client.getObject(getObjectRequest);
+        s3Client.shutdown();
+        return object;
+    }
+
+    public static com.amazonaws.services.textract.model.S3Object getTextractS3Object(String key, String bucket) {
+        return new com.amazonaws.services.textract.model.S3Object()
+                .withBucket(bucket)
+                .withName(key);
+    }
+
     /**
      * Loads the SEA metro document dump to the given S3 Bucket.
      *
@@ -268,11 +307,16 @@ public class ProcessEventUtils {
         if (extraPrefix.isEmpty()) {
             fileName = ProcessEventUtils.getPrefix() + new File(filePath).getName();
         } else {
-            fileName = String.format("%s%s/%s", ProcessEventUtils.getPrefix(), extraPrefix, new File(filePath).getName());
+            fileName = getSchedulePdfKey(filePath, extraPrefix);
         }
         PutObjectRequest putObjectRequest = new PutObjectRequest(bucketName, fileName, new File(filePath));
         AmazonS3 s3 = ProcessEventUtils.getS3Client();
         s3.putObject(putObjectRequest);
         s3.shutdown();
+    }
+
+
+    public static String getSchedulePdfKey(String filePath, String extraPrefix) {
+        return String.format("%s%s/%s", ProcessEventUtils.getPrefix(), extraPrefix, new File(filePath).getName());
     }
 }

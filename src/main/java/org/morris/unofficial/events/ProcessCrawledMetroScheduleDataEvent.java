@@ -6,11 +6,15 @@ import com.amazonaws.services.lambda.runtime.events.S3Event;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
+import com.amazonaws.services.sns.AmazonSNS;
 import com.amazonaws.services.textract.AmazonTextract;
 import com.amazonaws.services.textract.model.Block;
-import com.amazonaws.services.textract.model.DetectDocumentTextRequest;
-import com.amazonaws.services.textract.model.Document;
-import com.amazonaws.services.textract.model.DetectDocumentTextResult;
+import com.amazonaws.services.textract.model.StartDocumentTextDetectionRequest;
+import com.amazonaws.services.textract.model.DocumentLocation;
+import com.amazonaws.services.textract.model.StartDocumentTextDetectionResult;
+import com.amazonaws.services.textract.model.GetDocumentTextDetectionRequest;
+import com.amazonaws.services.textract.model.GetDocumentTextDetectionResult;
+import com.amazonaws.services.textract.model.NotificationChannel;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.io.FileUtils;
@@ -21,7 +25,6 @@ import org.json.JSONObject;
 import org.morris.unofficial.models.KeyPhraseType;
 import org.morris.unofficial.models.MetroLine;
 import org.morris.unofficial.utils.ProcessEventUtils;
-import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.services.comprehend.ComprehendClient;
 import software.amazon.awssdk.services.comprehend.model.ComprehendException;
 import software.amazon.awssdk.services.comprehend.model.KeyPhrase;
@@ -57,6 +60,7 @@ public class ProcessCrawledMetroScheduleDataEvent {
         LambdaLogger logger = context.getLogger();
         AmazonS3 s3Client = ProcessEventUtils.getS3Client();
         AmazonTextract textractClient = ProcessEventUtils.getAmazonTextractClient();
+        AmazonSNS snsClient = ProcessEventUtils.getAmazonSNSClient();
 
         // lets get the processed data in a file
         List<MetroLine> metroLines = getMetroLineAsPojoFromJson(event, s3Client, logger);
@@ -79,6 +83,17 @@ public class ProcessCrawledMetroScheduleDataEvent {
                 // write pdf schedule to /tmp and put to s3 schedules bucket
                 ProcessEventUtils.printToPdfFile(LINE_SCHEDULE_PDF_FILE, lineSchedulePdfUrl, logger);
                 ProcessEventUtils.putS3File(LINE_SCHEDULE_PDF_FILE, SCHEDULES_BUCKET, line);
+                String pdfScheduleKey = ProcessEventUtils.getSchedulePdfKey(LINE_SCHEDULE_PDF_FILE, line);
+
+                // get schedule pdf textract blocks to begin pulling keyphrases
+                List<Block> pdfScheduleTextBlocks = detectPdfTextBlocks(ProcessEventUtils.getAmazonTextractClient(), pdfScheduleKey, logger);
+                if (pdfScheduleTextBlocks != null) {
+                    for (Block block : pdfScheduleTextBlocks) {
+                        logger.log("block---------------------------------------------");
+                        logger.log(block.getText());
+                        logger.log("end-----------------------------------------------");
+                    }
+                }
 
 //                String pdfScheduleContent = readPdfFileContent(logger);
 //
@@ -103,7 +118,9 @@ public class ProcessCrawledMetroScheduleDataEvent {
         }
 
         // shutdown all clients
-        ProcessEventUtils.shutdownClients(new ArrayList<>(Arrays.asList(s3Client, textractClient)));
+        ProcessEventUtils.shutdownClients(new ArrayList<>(Arrays.asList(s3Client, textractClient,
+                snsClient)));
+
         return "success";
     }
 
@@ -115,22 +132,34 @@ public class ProcessCrawledMetroScheduleDataEvent {
      *
      * @see MetroLine
      */
-    private List<Block> detectPdfTextBlocks(AmazonTextract textractClient, LambdaLogger logger) {
-        List<Block> pdfBlocks = new ArrayList<>();
-        try {
-            InputStream source = new FileInputStream(Paths.get(LINE_SCHEDULE_PDF_FILE).toFile());
-            SdkBytes sourceBytes = SdkBytes.fromInputStream(source);
+    private List<Block> detectPdfTextBlocks(AmazonTextract textractClient, String objectKey, LambdaLogger logger) {
+        String textractTopArn = ProcessEventUtils.getTextractTopicArn();
 
-            Document document = new Document().withBytes(sourceBytes.asByteBuffer());
-            DetectDocumentTextRequest detectDocumentTextRequest = new DetectDocumentTextRequest()
-                    .withDocument(document);
+        // send detection to SNS channel and then GetResults
+        NotificationChannel notificationChannel = new NotificationChannel().withSNSTopicArn(textractTopArn);
 
-            DetectDocumentTextResult detectDocumentTextResult = textractClient.detectDocumentText(detectDocumentTextRequest);
-            pdfBlocks = detectDocumentTextResult.getBlocks();
-        } catch (FileNotFoundException e) {
-            logger.log(String.format("File not found: '%s' and unable to process PDF Text blocks", LINE_SCHEDULE_PDF_FILE) + e.getMessage());
+        StartDocumentTextDetectionRequest detectDocumentTextRequest = new StartDocumentTextDetectionRequest()
+                .withDocumentLocation(new DocumentLocation().withS3Object(ProcessEventUtils.getTextractS3Object(objectKey, SCHEDULES_BUCKET)))
+                .withNotificationChannel(notificationChannel);
+
+        StartDocumentTextDetectionResult detectDocumentTextResult = textractClient.startDocumentTextDetection(detectDocumentTextRequest);
+        String jobId = detectDocumentTextResult.getJobId();
+
+        GetDocumentTextDetectionRequest getDocumentTextDetectionRequest = new GetDocumentTextDetectionRequest()
+                .withJobId(jobId);
+        GetDocumentTextDetectionResult getDocumentTextDetectionResult = textractClient.getDocumentTextDetection(getDocumentTextDetectionRequest);
+
+        // wait for status
+        String jobStatus = null;
+        while (jobStatus == null) {
+            logger.log("Waiting for text detection status---------------------------");
+            jobStatus = getDocumentTextDetectionResult.getJobStatus();
         }
-        return pdfBlocks;
+        if (!jobStatus.equals("Succeeded")) {
+            logger.log("Text detected failed with result" + jobStatus);
+            return null;
+        }
+        return getDocumentTextDetectionResult.getBlocks();
     }
 
     /**
