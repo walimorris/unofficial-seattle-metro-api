@@ -5,14 +5,12 @@ import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.lambda.runtime.events.ScheduledEvent;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.GetObjectRequest;
-import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.Bucket;
 import com.amazonaws.services.s3.model.AmazonS3Exception;
 import com.amazonaws.services.s3.model.ObjectListing;
 import org.morris.unofficial.utils.ProcessEventUtils;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
@@ -36,7 +34,7 @@ public class CrawlMetroEvent {
 
         printMetroDumpToTmp(logger);
         if (!bucketContainsDocuments()) {
-            putS3File(); // contains no documents, crawl immediately
+            ProcessEventUtils.putS3File(TMP_ROUTES_DOC_FILE, BUCKET, ""); // contains no documents, crawl immediately
         } else {
             S3Object latestDocumentObject = getMostRecentDocumentObject(logger);
             logger.log("latest document date: " + latestDocumentObject.getObjectMetadata().getLastModified());
@@ -47,7 +45,7 @@ public class CrawlMetroEvent {
             // unload changed dump to unprocessed store i.e. the dump currently in /tmp/routes_doc
             if (!isScanMatch) {
                 logger.log("not a current match - uploading new dump document");
-                putS3File();
+                ProcessEventUtils.putS3File(TMP_ROUTES_DOC_FILE, BUCKET, "");
             }
         }
         return "success";
@@ -156,16 +154,5 @@ public class CrawlMetroEvent {
         } catch (IOException e) {
             logger.log(String.format("Error writing route document dump to '%s': ", TMP_ROUTES_DOC_FILE + e.getMessage()));
         }
-    }
-
-    /**
-     * Loads the SEA metro document dump to the unprocessed bucket in S3.
-     */
-    private void putS3File() {
-        String fileName = ProcessEventUtils.getPrefix() + new File(TMP_ROUTES_DOC_FILE).getName();
-        PutObjectRequest putObjectRequest = new PutObjectRequest(BUCKET, fileName, new File(TMP_ROUTES_DOC_FILE));
-        AmazonS3 s3 = ProcessEventUtils.getS3Client();
-        s3.putObject(putObjectRequest);
-        s3.shutdown();
     }
 }

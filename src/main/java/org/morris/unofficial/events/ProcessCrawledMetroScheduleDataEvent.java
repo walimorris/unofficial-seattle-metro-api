@@ -47,6 +47,7 @@ import java.util.List;
 
 public class ProcessCrawledMetroScheduleDataEvent {
     final private static String PROCESSED_BUCKET = System.getenv("PROCESSED_BUCKET_NAME");
+    final private static String SCHEDULES_BUCKET = System.getenv("SCHEDULES_BUCKET_NAME");
     final private static String ROUTES_JSON_FILE = "/tmp/routes_doc.json";
     final static private String LINE_SCHEDULE_TXT_FILE = "/tmp/line_schedule_doc.txt";
     final static private String LINE_SCHEDULE_PDF_FILE = "/tmp/line_schedule_doc.pdf";
@@ -75,27 +76,29 @@ public class ProcessCrawledMetroScheduleDataEvent {
                 // query the scheduleUrl and obtain the pdf document with schedules
                 String lineSchedulePdfUrl = queryLineScheduleUrlForPdfScheduleUrl(lineScheduleUrl, line, logger);
 
-                // write pdf schedule to /tmp
+                // write pdf schedule to /tmp and put to s3 schedules bucket
                 ProcessEventUtils.printToPdfFile(LINE_SCHEDULE_PDF_FILE, lineSchedulePdfUrl, logger);
-                String pdfScheduleContent = readPdfFileContent(logger);
+                ProcessEventUtils.putS3File(LINE_SCHEDULE_PDF_FILE, SCHEDULES_BUCKET, line);
 
-                // write schedule content to .txt file in /tmp
-                if (pdfScheduleContent != null) {
-                    InputStream pdfScheduleContentInputStream = new ByteArrayInputStream(pdfScheduleContent.getBytes());
-                    ProcessEventUtils.printToFile(pdfScheduleContentInputStream, LINE_SCHEDULE_PDF_CONTENT_TXT_FILE, logger);
-
-                    List<KeyPhrase> scheduleKeyPhraseList = comprehendKeyPhraseList(pdfScheduleContent, logger);
-                    if (scheduleKeyPhraseList != null) {
-                        // clean key phrases of any extra characters orr improper format
-                        List<KeyPhrase> formattedKeyPhraseList = formatKeyPhraseList(scheduleKeyPhraseList, logger);
-                        if (formattedKeyPhraseList != null) {
-                            // receive list of stops and stop-times to begin building a structure that holds each stop
-                            // and its respective stop times
-                            List<KeyPhrase> formattedStopKeyPhrases = getFormattedStopKeyPhrases(formattedKeyPhraseList, KeyPhraseType.STOPS);
-                            List<KeyPhrase> formattedStopTimeKeyPhrases = getFormattedStopKeyPhrases(formattedKeyPhraseList, KeyPhraseType.STOP_TIMES);
-                        }
-                    }
-                }
+//                String pdfScheduleContent = readPdfFileContent(logger);
+//
+//                // write schedule content to .txt file in /tmp
+//                if (pdfScheduleContent != null) {
+//                    InputStream pdfScheduleContentInputStream = new ByteArrayInputStream(pdfScheduleContent.getBytes());
+//                    ProcessEventUtils.printToFile(pdfScheduleContentInputStream, LINE_SCHEDULE_PDF_CONTENT_TXT_FILE, logger);
+//
+//                    List<KeyPhrase> scheduleKeyPhraseList = comprehendKeyPhraseList(pdfScheduleContent, logger);
+//                    if (scheduleKeyPhraseList != null) {
+//                        // clean key phrases of any extra characters orr improper format
+//                        List<KeyPhrase> formattedKeyPhraseList = formatKeyPhraseList(scheduleKeyPhraseList, logger);
+//                        if (formattedKeyPhraseList != null) {
+//                            // receive list of stops and stop-times to begin building a structure that holds each stop
+//                            // and its respective stop times
+//                            List<KeyPhrase> formattedStopKeyPhrases = getFormattedStopKeyPhrases(formattedKeyPhraseList, KeyPhraseType.STOPS);
+//                            List<KeyPhrase> formattedStopTimeKeyPhrases = getFormattedStopKeyPhrases(formattedKeyPhraseList, KeyPhraseType.STOP_TIMES);
+//                        }
+//                    }
+//                }
             }
         }
 

@@ -3,6 +3,7 @@ package org.morris.unofficial.utils;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectInputStream;
 import com.amazonaws.services.textract.AmazonTextract;
@@ -253,5 +254,25 @@ public class ProcessEventUtils {
             logger.log(String.format("Error creating S3Object from file '%s'" + e.getMessage(), filePath));
         }
         return null;
+    }
+
+    /**
+     * Loads the SEA metro document dump to the given S3 Bucket.
+     *
+     * @param filePath The /tmp path to the given file
+     * @param bucketName bucket to upload file
+     * @param extraPrefix string to add to bucket prefix
+     */
+    public static void putS3File(String filePath, String bucketName, String extraPrefix) {
+        String fileName;
+        if (extraPrefix.isEmpty()) {
+            fileName = ProcessEventUtils.getPrefix() + new File(filePath).getName();
+        } else {
+            fileName = String.format("%s%s/%s", ProcessEventUtils.getPrefix(), extraPrefix, new File(filePath).getName());
+        }
+        PutObjectRequest putObjectRequest = new PutObjectRequest(bucketName, fileName, new File(filePath));
+        AmazonS3 s3 = ProcessEventUtils.getS3Client();
+        s3.putObject(putObjectRequest);
+        s3.shutdown();
     }
 }
