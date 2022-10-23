@@ -59,7 +59,7 @@ public class ProcessCrawledMetroScheduleDataEvent {
     public String handleRequest(S3Event event, Context context) throws IOException {
         LambdaLogger logger = context.getLogger();
         AmazonS3 s3Client = ProcessEventUtils.getS3Client();
-        AmazonTextract textractClient = ProcessEventUtils.getAmazonTextractClient();
+        AmazonTextract textractClient = ProcessEventUtils.getAmazonTextractClient(true);
         AmazonSNS snsClient = ProcessEventUtils.getAmazonSNSClient();
 
         // lets get the processed data in a file
@@ -86,7 +86,7 @@ public class ProcessCrawledMetroScheduleDataEvent {
                 String pdfScheduleKey = ProcessEventUtils.getSchedulePdfKey(LINE_SCHEDULE_PDF_FILE, line);
 
                 // get schedule pdf textract blocks to begin pulling keyphrases
-                List<Block> pdfScheduleTextBlocks = detectPdfTextBlocks(ProcessEventUtils.getAmazonTextractClient(), pdfScheduleKey, logger);
+                List<Block> pdfScheduleTextBlocks = detectPdfTextBlocks(textractClient, pdfScheduleKey, logger);
                 if (pdfScheduleTextBlocks != null) {
                     for (Block block : pdfScheduleTextBlocks) {
                         logger.log("block---------------------------------------------");
@@ -138,8 +138,12 @@ public class ProcessCrawledMetroScheduleDataEvent {
         // send detection to SNS channel and then GetResults
         NotificationChannel notificationChannel = new NotificationChannel().withSNSTopicArn(textractTopArn);
 
+        // create document location to feed to document text detection request
+        DocumentLocation documentLocation = new DocumentLocation().withS3Object(ProcessEventUtils.getTextractS3Object(objectKey, SCHEDULES_BUCKET)
+                .withBucket(SCHEDULES_BUCKET).withName(objectKey));
+
         StartDocumentTextDetectionRequest detectDocumentTextRequest = new StartDocumentTextDetectionRequest()
-                .withDocumentLocation(new DocumentLocation().withS3Object(ProcessEventUtils.getTextractS3Object(objectKey, SCHEDULES_BUCKET)))
+                .withDocumentLocation(documentLocation)
                 .withNotificationChannel(notificationChannel);
 
         StartDocumentTextDetectionResult detectDocumentTextResult = textractClient.startDocumentTextDetection(detectDocumentTextRequest);
@@ -149,7 +153,7 @@ public class ProcessCrawledMetroScheduleDataEvent {
                 .withJobId(jobId);
         GetDocumentTextDetectionResult getDocumentTextDetectionResult = textractClient.getDocumentTextDetection(getDocumentTextDetectionRequest);
 
-        // wait for status
+        // wait for succeeded statuc before getting detection result blocks
         String jobStatus = null;
         while (jobStatus == null) {
             logger.log("Waiting for text detection status---------------------------");

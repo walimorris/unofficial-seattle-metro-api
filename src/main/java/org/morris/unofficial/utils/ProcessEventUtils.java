@@ -1,5 +1,6 @@
 package org.morris.unofficial.utils;
 
+import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
@@ -50,10 +51,28 @@ public class ProcessEventUtils {
     }
 
     /**
-     * Get {@link AmazonTextract} client
+     * Get {@link AmazonTextract} client with optional endpoint configuration.
+     * {@code Please note: only one of region or endpoint can be set.}
+     *
      * @return {@link AmazonTextract}
      */
-    public static AmazonTextract getAmazonTextractClient() {
+    public static AmazonTextract getAmazonTextractClient(boolean withEndpoint) {
+        if (withEndpoint) {
+            EndpointConfiguration endpoint = new EndpointConfiguration(
+                    "https://textract." + getRegion() + ".amazonaws.com", getRegion());
+
+            return AmazonTextractClient.builder()
+                    .withEndpointConfiguration(endpoint)
+                    .build();
+        }
+        return getAmazonTextractClient();
+    }
+
+    /**
+     * Get {@link AmazonTextract} client.
+     * @return {@link AmazonTextract}
+     */
+    private static AmazonTextract getAmazonTextractClient() {
         return AmazonTextractClient.builder()
                 .withRegion(getRegion())
                 .build();
