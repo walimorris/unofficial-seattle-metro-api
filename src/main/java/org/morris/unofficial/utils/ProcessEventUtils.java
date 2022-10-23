@@ -16,6 +16,10 @@ import com.amazonaws.services.sns.AmazonSNS;
 import com.amazonaws.services.sns.AmazonSNSClientBuilder;
 import com.amazonaws.services.sns.model.ListTopicsResult;
 import com.amazonaws.services.sns.model.Topic;
+import com.amazonaws.services.sqs.AmazonSQS;
+import com.amazonaws.services.sqs.AmazonSQSClientBuilder;
+import com.amazonaws.services.sqs.model.GetQueueUrlRequest;
+import com.amazonaws.services.sqs.model.GetQueueUrlResult;
 import com.amazonaws.services.textract.AmazonTextract;
 import org.apache.commons.io.FileUtils;
 import org.joda.time.DateTime;
@@ -44,6 +48,8 @@ public class ProcessEventUtils {
     final static public String GET_REQUEST = "GET";
     final static public String METRO_TOP_LEVEL_URL = "https://kingcounty.gov";
     final static private String TXFFTXYYGT = System.getenv("TXFFTXYYGT");
+    final static private String METRO_SQS_QUEUE = System.getenv("METROSQS");
+    final static private String FIFO = ".fifo";
 
     /**
      * Get {@link AmazonS3} client
@@ -108,6 +114,17 @@ public class ProcessEventUtils {
     }
 
     /**
+     * Get {@link AmazonSQS} client.
+     *
+     * @return {@link AmazonSQS}
+     */
+    public static AmazonSQS getAmazonSQSClient() {
+        return AmazonSQSClientBuilder.standard()
+                .withRegion(getRegion())
+                .build();
+    }
+
+    /**
      * Get {@link AmazonIdentityManagement} client.
      *
      * @return {@link AmazonIdentityManagement}
@@ -131,9 +148,11 @@ public class ProcessEventUtils {
                 ((AmazonTextract) client).shutdown();
             } else if (client instanceof TextractClient) {
                 ((TextractClient) client).close();
+            } else if (client instanceof AmazonIdentityManagement) {
+                ((AmazonIdentityManagement) client).shutdown();
             } else {
-                if (client instanceof AmazonIdentityManagement) {
-                    ((AmazonIdentityManagement) client).shutdown();
+                if (client instanceof AmazonSQS) {
+                    ((AmazonSQS) client).shutdown();
                 }
             }
         }
@@ -172,6 +191,20 @@ public class ProcessEventUtils {
         String arn = result.getRole().getArn();
         identityManagementClient.shutdown();
         return arn;
+    }
+
+    /**
+     * Get MetroLine SQS Queue URL for text detection messaging process.
+     *
+     * @return {@link String} metro SQS Queue Url
+     */
+    public static String getMetroSQSQueueUrl() {
+        AmazonSQS sqsClient = getAmazonSQSClient();
+        GetQueueUrlRequest getQueueUrlRequest = new GetQueueUrlRequest().withQueueName(METRO_SQS_QUEUE + FIFO);
+        GetQueueUrlResult getQueueUrlResult = sqsClient.getQueueUrl(getQueueUrlRequest);
+        String metroSQSQueueUrl = getQueueUrlResult.getQueueUrl();
+        sqsClient.shutdown();
+        return metroSQSQueueUrl;
     }
 
     /**

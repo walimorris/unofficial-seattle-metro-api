@@ -8,6 +8,8 @@ import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.sns.AmazonSNS;
+import com.amazonaws.services.sqs.AmazonSQS;
+import com.amazonaws.services.sqs.model.Message;
 import com.amazonaws.services.textract.AmazonTextract;
 import com.amazonaws.services.textract.model.Block;
 import com.amazonaws.services.textract.model.StartDocumentTextDetectionRequest;
@@ -17,6 +19,7 @@ import com.amazonaws.services.textract.model.GetDocumentTextDetectionRequest;
 import com.amazonaws.services.textract.model.GetDocumentTextDetectionResult;
 import com.amazonaws.services.textract.model.NotificationChannel;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.io.FileUtils;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -48,6 +51,8 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.TimeUnit;
 
 public class ProcessCrawledMetroScheduleDataEvent {
@@ -58,15 +63,19 @@ public class ProcessCrawledMetroScheduleDataEvent {
     final private static String LINE_SCHEDULE_PDF_FILE = "/tmp/line_schedule_doc.pdf";
     final private static String LINE_SCHEDULE_PDF_CONTENT_TXT_FILE = "/tmp/line_schedule_pdf_content.txt";
 
-    final public static String IN_PROGRESS = "IN_PROGRESS";
+    final public static String SUCCEEDED = "SUCCEEDED";
+    final public static String JOB_ID = "JobId";
+    final public static String STATUS = "Status";
+    final public static String MESSAGE = "Message";
     final public static String CLIENT_REQUEST_TOKEN = "MetroLineRequestToken";
 
-    public String handleRequest(S3Event event, Context context) throws InterruptedException {
+    public String handleRequest(S3Event event, Context context) throws InterruptedException, IOException {
         LambdaLogger logger = context.getLogger();
         AmazonS3 s3Client = ProcessEventUtils.getS3Client();
         AmazonTextract textractClient = ProcessEventUtils.getAmazonTextractClient(true);
         AmazonSNS snsClient = ProcessEventUtils.getAmazonSNSClient();
-        AmazonIdentityManagement identityManagmentClient = ProcessEventUtils.getAmazonIdentityManagementClient();
+        AmazonSQS sqsClient = ProcessEventUtils.getAmazonSQSClient();
+        AmazonIdentityManagement identityManagementClient = ProcessEventUtils.getAmazonIdentityManagementClient();
 
         // lets get the processed data in a file
         List<MetroLine> metroLines = getMetroLineAsPojoFromJson(event, s3Client, logger);
@@ -91,8 +100,8 @@ public class ProcessCrawledMetroScheduleDataEvent {
                 ProcessEventUtils.putS3File(LINE_SCHEDULE_PDF_FILE, SCHEDULES_BUCKET, line);
                 String pdfScheduleKey = ProcessEventUtils.getSchedulePdfKey(LINE_SCHEDULE_PDF_FILE, line);
 
-                // get schedule pdf textract blocks to begin pulling keyphrases
-                List<Block> pdfScheduleTextBlocks = detectPdfTextBlocksWithTextract(textractClient, pdfScheduleKey, logger);
+                // get schedule pdf textract blocks to begin pulling key phrases
+                List<Block> pdfScheduleTextBlocks = detectPdfTextBlocksWithTextract(textractClient, sqsClient, pdfScheduleKey, logger);
                 if (pdfScheduleTextBlocks != null) {
                     for (Block block : pdfScheduleTextBlocks) {
                         logger.log("block---------------------------------------------");
@@ -125,7 +134,7 @@ public class ProcessCrawledMetroScheduleDataEvent {
 
         // shutdown all clients
         ProcessEventUtils.shutdownClients(new ArrayList<>(Arrays.asList(s3Client, textractClient,
-                snsClient, identityManagmentClient)));
+                snsClient, sqsClient, identityManagementClient)));
 
         return "success";
     }
@@ -143,7 +152,9 @@ public class ProcessCrawledMetroScheduleDataEvent {
      * @see GetDocumentTextDetectionRequest
      * @see GetDocumentTextDetectionResult#getBlocks()
      */
-    private List<Block> detectPdfTextBlocksWithTextract(AmazonTextract textractClient, String objectKey, LambdaLogger logger) throws InterruptedException {
+    private List<Block> detectPdfTextBlocksWithTextract(AmazonTextract textractClient, AmazonSQS sqsClient, String objectKey,
+                                                        LambdaLogger logger) throws InterruptedException, IOException {
+
         String textractTopicArn = ProcessEventUtils.getTextractTopicArn();
         String txfftxyyftArn = ProcessEventUtils.getTXFFTXYYFTRole();
 
@@ -163,23 +174,117 @@ public class ProcessCrawledMetroScheduleDataEvent {
 
         StartDocumentTextDetectionResult detectDocumentTextResult = textractClient.startDocumentTextDetection(detectDocumentTextRequest);
         String jobId = detectDocumentTextResult.getJobId();
+        return processDocumentTextDetection(sqsClient, textractClient, jobId, logger);
+    }
 
-        GetDocumentTextDetectionRequest getDocumentTextDetectionRequest = new GetDocumentTextDetectionRequest()
-                .withJobId(jobId);
-        GetDocumentTextDetectionResult getDocumentTextDetectionResult = textractClient.getDocumentTextDetection(getDocumentTextDetectionRequest);
+    /**
+     * Processes a {@link StartDocumentTextDetectionRequest} given the request's job id by polling the metro
+     * SQS Queue until a message is detected in the queue.
+     *
+     * @param sqsClient {@link AmazonSQS} client
+     * @param textractClient {@link AmazonTextract} client
+     * @param jobId the job id for the {@link StartDocumentTextDetectionRequest}
+     * @param logger {@link LambdaLogger}
+     *
+     * @return {@link List} of {@link Block} from the detection
+     * @throws InterruptedException
+     * @throws IOException
+     */
+    private List<Block> processDocumentTextDetection(AmazonSQS sqsClient, AmazonTextract textractClient, String jobId, LambdaLogger logger)
+            throws InterruptedException, IOException {
 
-        // wait for succeeded status before getting detection result blocks
-        String jobStatus = getDocumentTextDetectionResult.getJobStatus();
-        while (jobStatus.equalsIgnoreCase(IN_PROGRESS)) {
-            logger.log("Waiting for text detection status---------------------------");
-            TimeUnit.SECONDS.sleep(5);
-            jobStatus = getDocumentTextDetectionResult.getJobStatus();
+        String metroSQSQueueUrl = ProcessEventUtils.getMetroSQSQueueUrl();
+        boolean jobFound = false;
+        List<Message> messages;
+
+        while (!jobFound) {
+            // poll sqs queue for messages
+            messages = sqsClient.receiveMessage(metroSQSQueueUrl).getMessages();
+
+            // loop through messages received
+            if ( !messages.isEmpty() ) {
+                for (Message message : messages) {
+                    String notification = message.getBody();
+                    Map<String, String> notificationProperties = getNotificationPropertiesMap(notification);
+
+                    // get the results of the found job
+                    if (notificationProperties.get(JOB_ID).equals(jobId)) {
+                        jobFound = true;
+                        if (notificationProperties.get(STATUS).equals(SUCCEEDED)) {
+                            return getBlocksFromDocumentDetectionPaginationResults(textractClient, jobId);
+                        }
+                        logger.log("Document Text Detection Failed.");
+                        sqsClient.deleteMessage(metroSQSQueueUrl, message.getReceiptHandle());
+                    } else {
+                        logger.log("Job received was not job: " +  jobId);
+                        //Delete unknown message. Consider moving message to dead letter queue
+                        sqsClient.deleteMessage(metroSQSQueueUrl, message.getReceiptHandle());
+                    }
+                }
+            } else {
+                // sleep in order to give time for document detection in sqs
+                logger.log("Polling Metro Schedule SQS Queue for messages...");
+                TimeUnit.SECONDS.sleep(10);
+            }
         }
-        if (!jobStatus.equalsIgnoreCase("Succeeded")) {
-            logger.log("Text detected failed with result" + jobStatus);
-            return null;
+        return null;
+    }
+
+    /**
+     * Gets all blocks from paginated {@link StartDocumentTextDetectionResult} from results of multiple PDF pages
+     * being detected.
+     *
+     * @param textractClient {@link AmazonTextract} client
+     * @param jobId the job id for the {@link StartDocumentTextDetectionRequest}
+     *
+     * @return {@link List} of {@link Block}
+     */
+    private List<Block> getBlocksFromDocumentDetectionPaginationResults(AmazonTextract textractClient, String jobId) {
+        List<Block> blocks = new ArrayList<>();
+        String paginationToken = null;
+        boolean isProcessed = false;
+
+        // process until all page result blocks have been added
+        while (!isProcessed) {
+            GetDocumentTextDetectionRequest getDocumentTextDetectionRequest = new GetDocumentTextDetectionRequest()
+                    .withJobId(jobId)
+                    .withNextToken(paginationToken);
+
+            GetDocumentTextDetectionResult getDocumentTextDetectionResult = textractClient
+                    .getDocumentTextDetection(getDocumentTextDetectionRequest);
+
+            blocks.addAll(getDocumentTextDetectionResult.getBlocks());
+
+            // get the next page, if there is one
+            paginationToken = getDocumentTextDetectionResult.getNextToken();
+            if (paginationToken == null) {
+                isProcessed = true;
+            }
         }
-        return getDocumentTextDetectionResult.getBlocks();
+        return blocks;
+    }
+
+    /**
+     * Get {@link Map} that contains the properties from an SNS notification with content from a Textract detection.
+     *
+     * @param notification SNS notification from textract detection
+     * @return {@link Map}
+     *
+     * @throws IOException
+     */
+    private Map<String, String> getNotificationPropertiesMap(String notification) throws IOException {
+        Map<String, String> notificationProperties = new HashMap<>();
+        ObjectMapper objectMapper = new ObjectMapper();
+        JsonNode jsonMessageTree = objectMapper.readTree(notification);
+        JsonNode messageBodyText = jsonMessageTree.get(MESSAGE);
+        notificationProperties.put(MESSAGE, messageBodyText.asText());
+        ObjectMapper operationResultMapper = new ObjectMapper();
+        JsonNode jsonResultTree = operationResultMapper.readTree(messageBodyText.textValue());
+        JsonNode operationJobId = jsonResultTree.get(JOB_ID);
+        JsonNode operationStatus = jsonResultTree.get(STATUS);
+        notificationProperties.put(JOB_ID, operationJobId.asText());
+        notificationProperties.put(STATUS, operationStatus.asText());
+        return notificationProperties;
     }
 
     /**
