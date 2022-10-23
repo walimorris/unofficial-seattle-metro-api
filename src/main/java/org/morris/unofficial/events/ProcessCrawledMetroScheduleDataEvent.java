@@ -1,5 +1,6 @@
 package org.morris.unofficial.events;
 
+import com.amazonaws.services.identitymanagement.AmazonIdentityManagement;
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.lambda.runtime.events.S3Event;
@@ -47,20 +48,25 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 public class ProcessCrawledMetroScheduleDataEvent {
     final private static String PROCESSED_BUCKET = System.getenv("PROCESSED_BUCKET_NAME");
     final private static String SCHEDULES_BUCKET = System.getenv("SCHEDULES_BUCKET_NAME");
     final private static String ROUTES_JSON_FILE = "/tmp/routes_doc.json";
-    final static private String LINE_SCHEDULE_TXT_FILE = "/tmp/line_schedule_doc.txt";
-    final static private String LINE_SCHEDULE_PDF_FILE = "/tmp/line_schedule_doc.pdf";
-    final static private String LINE_SCHEDULE_PDF_CONTENT_TXT_FILE = "/tmp/line_schedule_pdf_content.txt";
+    final private static String LINE_SCHEDULE_TXT_FILE = "/tmp/line_schedule_doc.txt";
+    final private static String LINE_SCHEDULE_PDF_FILE = "/tmp/line_schedule_doc.pdf";
+    final private static String LINE_SCHEDULE_PDF_CONTENT_TXT_FILE = "/tmp/line_schedule_pdf_content.txt";
 
-    public String handleRequest(S3Event event, Context context) throws IOException {
+    final public static String IN_PROGRESS = "IN_PROGRESS";
+    final public static String CLIENT_REQUEST_TOKEN = "MetroLineRequestToken";
+
+    public String handleRequest(S3Event event, Context context) throws InterruptedException {
         LambdaLogger logger = context.getLogger();
         AmazonS3 s3Client = ProcessEventUtils.getS3Client();
         AmazonTextract textractClient = ProcessEventUtils.getAmazonTextractClient(true);
         AmazonSNS snsClient = ProcessEventUtils.getAmazonSNSClient();
+        AmazonIdentityManagement identityManagmentClient = ProcessEventUtils.getAmazonIdentityManagementClient();
 
         // lets get the processed data in a file
         List<MetroLine> metroLines = getMetroLineAsPojoFromJson(event, s3Client, logger);
@@ -86,7 +92,7 @@ public class ProcessCrawledMetroScheduleDataEvent {
                 String pdfScheduleKey = ProcessEventUtils.getSchedulePdfKey(LINE_SCHEDULE_PDF_FILE, line);
 
                 // get schedule pdf textract blocks to begin pulling keyphrases
-                List<Block> pdfScheduleTextBlocks = detectPdfTextBlocks(textractClient, pdfScheduleKey, logger);
+                List<Block> pdfScheduleTextBlocks = detectPdfTextBlocksWithTextract(textractClient, pdfScheduleKey, logger);
                 if (pdfScheduleTextBlocks != null) {
                     for (Block block : pdfScheduleTextBlocks) {
                         logger.log("block---------------------------------------------");
@@ -119,32 +125,41 @@ public class ProcessCrawledMetroScheduleDataEvent {
 
         // shutdown all clients
         ProcessEventUtils.shutdownClients(new ArrayList<>(Arrays.asList(s3Client, textractClient,
-                snsClient)));
+                snsClient, identityManagmentClient)));
 
         return "success";
     }
 
     /**
-     * Get List of {@link Block} from the MetroLine Schedule PDF file.
+     * Get List of {@link Block} from the MetroLine Schedule PDF file by utilizing {@link AmazonTextract}
+     * machine learning service to analyze the text with the given schedule pdf file. The schedule PDF file
+     * is written to /tmp directory and uploaded to S3 where Textract can analyze the text.
      *
      * @param logger {@link LambdaLogger}
      * @return {@link Block}
      *
      * @see MetroLine
+     * @see StartDocumentTextDetectionRequest
+     * @see GetDocumentTextDetectionRequest
+     * @see GetDocumentTextDetectionResult#getBlocks()
      */
-    private List<Block> detectPdfTextBlocks(AmazonTextract textractClient, String objectKey, LambdaLogger logger) {
-        String textractTopArn = ProcessEventUtils.getTextractTopicArn();
+    private List<Block> detectPdfTextBlocksWithTextract(AmazonTextract textractClient, String objectKey, LambdaLogger logger) throws InterruptedException {
+        String textractTopicArn = ProcessEventUtils.getTextractTopicArn();
+        String txfftxyyftArn = ProcessEventUtils.getTXFFTXYYFTRole();
 
-        // send detection to SNS channel and then GetResults
-        NotificationChannel notificationChannel = new NotificationChannel().withSNSTopicArn(textractTopArn);
+        // send detection to SNS notification channel - topic arn and role arn is needed
+        NotificationChannel notificationChannel = new NotificationChannel()
+                .withSNSTopicArn(textractTopicArn)
+                .withRoleArn(txfftxyyftArn);
 
         // create document location to feed to document text detection request
-        DocumentLocation documentLocation = new DocumentLocation().withS3Object(ProcessEventUtils.getTextractS3Object(objectKey, SCHEDULES_BUCKET)
-                .withBucket(SCHEDULES_BUCKET).withName(objectKey));
+        com.amazonaws.services.textract.model.S3Object textractObject = ProcessEventUtils.getTextractS3Object(objectKey, SCHEDULES_BUCKET);
+        DocumentLocation documentLocation = new DocumentLocation().withS3Object(textractObject);
 
         StartDocumentTextDetectionRequest detectDocumentTextRequest = new StartDocumentTextDetectionRequest()
                 .withDocumentLocation(documentLocation)
-                .withNotificationChannel(notificationChannel);
+                .withNotificationChannel(notificationChannel)
+                .withClientRequestToken(CLIENT_REQUEST_TOKEN);
 
         StartDocumentTextDetectionResult detectDocumentTextResult = textractClient.startDocumentTextDetection(detectDocumentTextRequest);
         String jobId = detectDocumentTextResult.getJobId();
@@ -153,13 +168,14 @@ public class ProcessCrawledMetroScheduleDataEvent {
                 .withJobId(jobId);
         GetDocumentTextDetectionResult getDocumentTextDetectionResult = textractClient.getDocumentTextDetection(getDocumentTextDetectionRequest);
 
-        // wait for succeeded statuc before getting detection result blocks
-        String jobStatus = null;
-        while (jobStatus == null) {
+        // wait for succeeded status before getting detection result blocks
+        String jobStatus = getDocumentTextDetectionResult.getJobStatus();
+        while (jobStatus.equalsIgnoreCase(IN_PROGRESS)) {
             logger.log("Waiting for text detection status---------------------------");
+            TimeUnit.SECONDS.sleep(5);
             jobStatus = getDocumentTextDetectionResult.getJobStatus();
         }
-        if (!jobStatus.equals("Succeeded")) {
+        if (!jobStatus.equalsIgnoreCase("Succeeded")) {
             logger.log("Text detected failed with result" + jobStatus);
             return null;
         }

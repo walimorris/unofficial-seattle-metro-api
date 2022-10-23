@@ -1,6 +1,10 @@
 package org.morris.unofficial.utils;
 
 import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration;
+import com.amazonaws.services.identitymanagement.AmazonIdentityManagement;
+import com.amazonaws.services.identitymanagement.AmazonIdentityManagementClient;
+import com.amazonaws.services.identitymanagement.model.GetRoleRequest;
+import com.amazonaws.services.identitymanagement.model.GetRoleResult;
 import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
@@ -39,9 +43,11 @@ public class ProcessEventUtils {
     final static public String DEFAULT_REGION = "us-west-2";
     final static public String GET_REQUEST = "GET";
     final static public String METRO_TOP_LEVEL_URL = "https://kingcounty.gov";
+    final static private String TXFFTXYYGT = System.getenv("TXFFTXYYGT");
 
     /**
      * Get {@link AmazonS3} client
+     *
      * @return {@link AmazonS3}
      */
     public static AmazonS3 getS3Client() {
@@ -70,6 +76,7 @@ public class ProcessEventUtils {
 
     /**
      * Get {@link AmazonTextract} client.
+     *
      * @return {@link AmazonTextract}
      */
     private static AmazonTextract getAmazonTextractClient() {
@@ -80,6 +87,7 @@ public class ProcessEventUtils {
 
     /**
      * Get {@link TextractClient}
+     *
      * @return {@link TextractClient}
      */
     public static TextractClient getTextractClient() {
@@ -88,6 +96,11 @@ public class ProcessEventUtils {
                 .build();
     }
 
+    /**
+     * Get {@link AmazonSNS} client.
+     *
+     * @return {@link AmazonSNS}
+     */
     public static AmazonSNS getAmazonSNSClient() {
         return AmazonSNSClientBuilder.standard()
                 .withRegion(getRegion())
@@ -95,7 +108,19 @@ public class ProcessEventUtils {
     }
 
     /**
+     * Get {@link AmazonIdentityManagement} client.
+     *
+     * @return {@link AmazonIdentityManagement}
+     */
+    public static AmazonIdentityManagement getAmazonIdentityManagementClient() {
+        return AmazonIdentityManagementClient.builder()
+                .withRegion(getRegion())
+                .build();
+    }
+
+    /**
      * Shutdown all clients in given {@link List}
+     *
      * @param clients {@link Object}
      */
     public static void shutdownClients(List<Object> clients) {
@@ -104,14 +129,21 @@ public class ProcessEventUtils {
                 ((AmazonS3) client).shutdown();
             } else if (client instanceof AmazonTextract) {
                 ((AmazonTextract) client).shutdown();
+            } else if (client instanceof TextractClient) {
+                ((TextractClient) client).close();
             } else {
-                if (client instanceof TextractClient) {
-                    ((TextractClient) client).close();
+                if (client instanceof AmazonIdentityManagement) {
+                    ((AmazonIdentityManagement) client).shutdown();
                 }
             }
         }
     }
 
+    /**
+     * Get {@link AmazonTextract} service topic arn from SNS service.
+     *
+     * @return {@link String}
+     */
     public static String getTextractTopicArn() {
         AmazonSNS snsClient = getAmazonSNSClient();
         ListTopicsResult topicsResults = snsClient.listTopics();
@@ -123,11 +155,27 @@ public class ProcessEventUtils {
                 textractTopicArn = topic.getTopicArn();
             }
         }
+        snsClient.shutdown();
         return textractTopicArn;
     }
 
     /**
-     * Get region or default to us-west-2
+     * Get Seattle Metro Role with basic permissions.
+     *
+     * @return {@link String}
+     */
+    public static String getTXFFTXYYFTRole() {
+        AmazonIdentityManagement identityManagementClient = getAmazonIdentityManagementClient();
+        GetRoleRequest getRoleRequest = new GetRoleRequest()
+                .withRoleName(TXFFTXYYGT);
+        GetRoleResult result = identityManagementClient.getRole(getRoleRequest);
+        String arn = result.getRole().getArn();
+        identityManagementClient.shutdown();
+        return arn;
+    }
+
+    /**
+     * Get region.
      *
      * @return {@link String} region
      */
@@ -300,6 +348,14 @@ public class ProcessEventUtils {
         return null;
     }
 
+    /**
+     * Get {@link S3Object}
+     *
+     * @param key object's key - path is s3 bucket
+     * @param bucket object's bucket
+     *
+     * @return {@link S3Object}
+     */
     public static S3Object getS3Object(String key, String bucket) {
         GetObjectRequest getObjectRequest = new GetObjectRequest(bucket, key);
         AmazonS3 s3Client = getS3Client();
@@ -308,6 +364,14 @@ public class ProcessEventUtils {
         return object;
     }
 
+    /**
+     * Get {@link com.amazonaws.services.textract.model.S3Object}.
+     *
+     * @param key object's key - path in s3 bucket
+     * @param bucket object's bucket
+     *
+     * @return {@link com.amazonaws.services.textract.model.S3Object}
+     */
     public static com.amazonaws.services.textract.model.S3Object getTextractS3Object(String key, String bucket) {
         return new com.amazonaws.services.textract.model.S3Object()
                 .withBucket(bucket)
@@ -335,6 +399,14 @@ public class ProcessEventUtils {
     }
 
 
+    /**
+     * Get a pdf schedule's key given the filepath and prefix
+     *
+     * @param filePath path to file
+     * @param extraPrefix file's prefix, if there is one.
+     *
+     * @return {@link String} the key
+     */
     public static String getSchedulePdfKey(String filePath, String extraPrefix) {
         return String.format("%s%s/%s", ProcessEventUtils.getPrefix(), extraPrefix, new File(filePath).getName());
     }
