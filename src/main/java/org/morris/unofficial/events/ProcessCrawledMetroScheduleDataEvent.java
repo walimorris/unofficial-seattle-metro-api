@@ -104,9 +104,9 @@ public class ProcessCrawledMetroScheduleDataEvent {
                 List<Block> pdfScheduleTextBlocks = detectPdfTextBlocksWithTextract(textractClient, sqsClient, pdfScheduleKey, logger);
                 if (pdfScheduleTextBlocks != null) {
                     for (Block block : pdfScheduleTextBlocks) {
-                        logger.log("block---------------------------------------------");
+                        logger.log("block--------------------------------------------");
                         logger.log(block.getText());
-                        logger.log("end-----------------------------------------------");
+                        logger.log("end----------------------------------------------");
                     }
                 }
 
